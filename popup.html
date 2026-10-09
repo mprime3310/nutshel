@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>NUTSHELL Assistant</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <div class="aurora"></div>
+    <div id="boot" class="boot"><div class="boot-mark">✦</div><p id="boot-copy">Connecting to models…</p><i></i></div>
+
+    <section id="gate" class="gate hidden" aria-hidden="true" style="display:none !important">
+    </section>
+
+    <header class="head">
+      <img src="icon.png" alt="NUTSHELL Assistant" class="logo" width="30" height="30" />
+      <div class="head-titles">
+        <h1>NUTSHELL</h1>
+        <p class="tag">Persistent page workspace</p>
+      </div>
+      <button id="activation-status" class="activation-status is-active" type="button" title="Unlimited use — no trial limit">UNLIMITED</button>
+      <button id="settings-toggle" class="win" title="Settings">⚙</button>
+    </header>
+
+    <section id="settings" class="settings hidden" aria-hidden="true">
+      <div class="settings-card" role="dialog" aria-modal="true" aria-label="AI provider settings">
+        <div class="settings-head">
+          <h2>✦ AI providers</h2>
+          <button id="settings-close" class="settings-close" type="button" title="Close" aria-label="Close settings">✕</button>
+        </div>
+      <label for="ai-provider">AI provider</label>
+      <select id="ai-provider"></select>
+
+      <label for="ai-key">API key <a id="ai-keylink" href="#" target="_blank" rel="noopener">Get a free key →</a></label>
+      <input id="ai-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your API key" />
+
+      <label for="ai-model">Model (optional)</label>
+      <input id="ai-model" type="text" list="ai-models" autocomplete="off" spellcheck="false" />
+      <datalist id="ai-models"></datalist>
+      <button id="ai-listmodels" class="ghost" type="button">List models my key can use</button>
+
+      <div id="ai-base-wrap" class="hidden">
+        <label for="ai-base">Server URL</label>
+        <input id="ai-base" type="url" autocomplete="off" spellcheck="false" />
+      </div>
+
+      <label class="check"><input id="ai-fallback" type="checkbox" checked /> If this provider is rate-limited, try my other saved providers</label>
+
+      <div class="row">
+        <button id="ai-save" class="ghost">Save</button>
+        <button id="ai-test" class="ghost">Test connection</button>
+      </div>
+      <p id="ai-note" class="api-note"></p>
+      <p class="api-note">Your key is stored only in this browser. Page content is sent straight to the provider you pick, with no NUTSHELL server in between. Free tiers of some providers may use your data to improve their products.</p>
+      </div>
+    </section>
+
+    <main id="app">
+      <div class="field">
+        <textarea id="input" placeholder="Paste a question or task — or hit Scan page to pull it automatically."></textarea>
+        <div class="row">
+          <button id="scan" class="ghost">⌁ Quick scan</button>
+          <button id="ultra-scan" class="ghost accent">✦ Ultra scan</button>
+          <button id="media-scan" class="ghost">◉ Scan media</button>
+          <button id="selection" class="ghost">✎ Use selection</button>
+          <button id="clear" class="ghost">✕ Clear</button>
+        </div>
+      </div>
+
+      <button id="analyze" class="cta">
+          <span class="cta-label">Analyze</span>
+      </button>
+
+      <div id="loader" class="loader hidden">
+        <span></span><span></span><span></span><span></span>
+        <p>NUTSHELL is mapping the task…</p>
+      </div>
+
+      <section id="result" class="result hidden">
+        <div class="result-head">
+          <h2>Answers</h2>
+          <div class="result-actions">
+            <button id="autofill" class="fill">✧ Autofill page</button>
+            <button id="copy" class="copy">⧉ Copy all</button>
+          </div>
+        </div>
+        <div class="where-row">
+          <span class="where-label">Fill target</span>
+          <button type="button" class="where-chip on" data-where="auto" title="NUTSHELL guesses the field; you see numbered markers on the page before anything is filled">Auto-match</button>
+          <button type="button" class="where-chip" data-where="choose" title="You click the field on the page for each answer">I choose</button>
+        </div>
+        <div id="nextstep" class="nextstep hidden"></div>
+        <div id="cards"></div>
+      </section>
+
+      <section id="typer" class="typer">
+        <button id="typer-toggle" class="typer-toggle" type="button" aria-expanded="false" aria-controls="typer-body">
+          <span class="typer-toggle-text"><span class="typer-caret">▸</span> Manual auto-type <span id="type-count-inline" class="typer-count-inline">0 slots</span></span>
+          <span class="typer-toggle-hint">paste · pick field · type</span>
+        </button>
+        <div id="typer-body" class="typer-body hidden">
+        <div class="typer-head">
+          <p class="typer-tag">Paste any text, queue it as an organised slot, pick a field on the page, then type one-by-one or in order.</p>
+        </div>
+        <label class="typer-label" for="type-name">Slot name</label>
+        <input id="type-name" class="typer-input" type="text" placeholder="e.g. Cover letter para 1" autocomplete="off" spellcheck="false" />
+        <label class="typer-label" for="type-paste">Paste text to auto-type</label>
+        <textarea id="type-paste" class="typer-paste" placeholder="Paste anything here — essays, answers, emails, code… then hit Add slot"></textarea>
+        <div class="row typer-row">
+          <button id="type-add" class="fill" type="button">＋ Add slot</button>
+          <button id="type-pick" class="ghost" type="button">🎯 Pick field</button>
+          <button id="type-clipboard" class="ghost" type="button">⧉ Paste from clipboard</button>
+          <button id="type-clear-paste" class="ghost" type="button">✕ Clear</button>
+        </div>
+        <div class="typer-toolbar">
+          <span id="type-count" class="typer-count">0 slots</span>
+          <div class="typer-tools">
+            <button id="type-all" class="ghost" type="button">▶ Type all in order</button>
+            <button id="type-stop" class="ghost hidden" type="button">■ Stop</button>
+            <button id="type-clear-all" class="ghost" type="button">🗑 Clear deck</button>
+          </div>
+        </div>
+        <div id="type-list" class="type-list"></div>
+        <p class="typer-hint">Each slot keeps its own target field. Use Pick field to choose, Flash to check it, Up/Down to organise the firing order. Speed follows the Typing speed slider below.</p>
+        </div>
+      </section>
+
+      <section id="preview" class="preview hidden">
+        <div class="preview-head">
+          <h2>Confirm autofill</h2>
+          <p class="preview-tag">Review each target field, then approve.</p>
+        </div>
+        <div id="preview-list"></div>
+        <div class="speed-row">
+          <div class="speed-top">
+            <label for="fill-wpm">Typing speed</label>
+            <span id="fill-wpm-val" class="speed-val">120 WPM</span>
+          </div>
+          <input id="fill-wpm" type="range" min="0" max="100" step="1" value="50" />
+          <div class="speed-chips">
+            <button type="button" class="chip" data-wpm="30">Slow</button>
+            <button type="button" class="chip" data-wpm="60">Medium</button>
+            <button type="button" class="chip" data-wpm="120">Fast</button>
+            <button type="button" class="chip" data-wpm="400">Turbo</button>
+          </div>
+          <label class="check"><input id="fill-instant" type="checkbox" /> Instant fill (no typing)</label>
+          <p id="fill-est" class="speed-est"></p>
+        </div>
+        <div class="preview-foot">
+          <button id="preview-toggle" class="ghost">☑ Toggle all</button>
+          <button id="preview-cancel" class="ghost">✕ Cancel</button>
+          <button id="preview-confirm" class="fill">✓ Fill approved</button>
+        </div>
+      </section>
+
+      <section id="followup-section" class="followup">
+        <div class="followup-head">
+          <h2>Live interview</h2>
+          <p class="followup-tag">Choose how much detail you want, then ask by text or microphone.</p>
+        </div>
+        <div class="answer-style" role="group" aria-label="Answer detail">
+          <button type="button" class="style-choice" data-answer-style="short">Short</button>
+          <button type="button" class="style-choice selected" data-answer-style="detailed">Detailed</button>
+          <button type="button" class="style-choice" data-answer-style="ultra">Ultra detail</button>
+        </div>
+        <div id="thread" class="thread hidden"></div>
+        <textarea id="followup" placeholder="e.g. Why is question 3 answered that way? Rewrite answer 2 shorter."></textarea>
+        <div class="row">
+          <button id="ask" class="cta cta-sm">
+            <span class="cta-label">Send question</span>
+          </button>
+          <button id="listen" class="ghost listen">◉ Start listening</button>
+          <button id="thread-clear" class="ghost">⟲ Clear chat</button>
+        </div>
+      </section>
+
+      <p id="status" class="status hidden"></p>
+      <p id="error" class="error hidden"></p>
+      <div id="pick-bar" class="pick-bar hidden">
+        <span id="pick-text"></span>
+        <button id="pick-cancel" class="ghost" type="button">✕ Cancel</button>
+      </div>
+    </main>
+
+    <footer>
+      Powered by NUTSHELL Technologies
+    </footer>
+    <script src="ai.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>
