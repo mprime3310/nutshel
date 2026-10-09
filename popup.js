@@ -739,12 +739,24 @@ async function applyFillOnPage(plan, delayMs = 0) {
     }
     const singleLine = el.tagName === "INPUT";
     const chars = [...(singleLine ? text.replace(/\s*\n+\s*/g, " ") : text)];
-    // Steady rhythm at exactly the speed the user picked (Stop button cancels).
-    const step = delayMs;
+    // Human rhythm: the slider sets the baseline, but every keystroke gets
+    // randomised jitter, quick spaces, real pauses after punctuation and
+    // rare mid-sentence hesitations — a steady metronome reads as a bot.
+    const humanWait = (ch) => {
+      if (delayMs <= 0) return 0;
+      let wait = delayMs * (0.55 + Math.random() * 0.9);       // ±45% jitter
+      if (ch === " ") wait *= 0.75;                             // spaces flow faster
+      else if (/[.,;:!?]/.test(ch)) wait *= 1.8 + Math.random(); // punctuation pause
+      else if (ch === "\n") wait *= 2.2 + Math.random();        // line break breath
+      else if (/[a-z]/.test(ch) && Math.random() < 0.05) wait *= 1.5; // letter hesitation
+      if (Math.random() < 0.04) wait += delayMs * (1.5 + Math.random() * 2); // rare think pause
+      return Math.max(18, Math.round(wait));
+    };
     for (const ch of chars) {
       if (window.__nutshellStopFill) return false;
       typeChar(el, ch);
-      if (step > 0) await sleep(step);
+      const wait = humanWait(ch);
+      if (wait > 0) await sleep(wait);
     }
     el.dispatchEvent(new Event("change", { bubbles: true }));
     el.blur?.();
@@ -845,11 +857,7 @@ function pickFieldOnPage(pickId, hint) {
     const root = document.createElement("div");
     root.id = "nutshell-picker";
     Object.assign(root.style, { position: "fixed", inset: "0", zIndex: "2147483646", pointerEvents: "none" });
-    const box = document.createElement("div");
-    Object.assign(box.style, {
-      position: "fixed", display: "none", border: "2px solid #b88cff", borderRadius: "6px",
-      background: "rgba(20,12,34,.55)", boxShadow: "none", transition: "all .05s linear",
-    });
+    // No hover highlight box — the page stays visually untouched while picking.
     const tip = document.createElement("div");
     const defaultTip = hint || "NUTSHELL · click the field where this should go · Esc to cancel";
     tip.textContent = defaultTip;
@@ -858,17 +866,10 @@ function pickFieldOnPage(pickId, hint) {
       font: "12px ui-monospace,Consolas,monospace", color: "#e9ddff", background: "#0e0a18", border: "1px solid #5b3f9e",
       borderRadius: "10px", boxShadow: "none", textAlign: "center",
     });
-    root.append(box, tip);
+    root.append(tip);
     document.documentElement.appendChild(root);
 
     const inPanel = (e) => !!e.target?.closest?.("#" + PANEL);
-    const move = (e) => {
-      if (inPanel(e)) { box.style.display = "none"; return; }
-      const el = targetFrom(e.target);
-      if (!el) { box.style.display = "none"; return; }
-      const r = (el.getBoundingClientRect().width ? el : (el.labels?.[0] || el.parentElement || el)).getBoundingClientRect();
-      Object.assign(box.style, { display: "block", left: r.left - 3 + "px", top: r.top - 3 + "px", width: r.width + 6 + "px", height: r.height + 6 + "px" });
-    };
     const swallow = (e) => {
       if (inPanel(e)) return;
       e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation?.();
@@ -886,7 +887,6 @@ function pickFieldOnPage(pickId, hint) {
     const cancel = () => done({ cancelled: true });
     const swallowEvents = ["mousedown", "mouseup", "pointerdown", "pointerup", "dblclick", "contextmenu"];
     function done(result) {
-      document.removeEventListener("mousemove", move, true);
       document.removeEventListener("click", click, true);
       document.removeEventListener("keydown", key, true);
       swallowEvents.forEach((t) => document.removeEventListener(t, swallow, true));
@@ -894,7 +894,6 @@ function pickFieldOnPage(pickId, hint) {
       root.remove();
       resolve(result);
     }
-    document.addEventListener("mousemove", move, true);
     document.addEventListener("click", click, true);
     document.addEventListener("keydown", key, true);
     swallowEvents.forEach((t) => document.addEventListener(t, swallow, true));
