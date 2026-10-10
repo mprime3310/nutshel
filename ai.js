@@ -168,9 +168,10 @@ Rules:
   }
 
   function mediaLines(media) {
-    return (Array.isArray(media) ? media : []).slice(0, 36).map((m) =>
-      `[${m.type}] ${m.alt || "untitled"}${m.captions ? `\nCaptions: ${String(m.captions).slice(0, 2000)}` : ""}`,
-    );
+    return (Array.isArray(media) ? media : []).slice(0, 36).map((m) => {
+      const src = m.src ? ` · ${String(m.src).slice(0, 160)}` : "";
+      return `[${m.type}] ${m.alt || "untitled"}${src}${m.captions ? `\nCaptions: ${String(m.captions).slice(0, 2000)}` : ""}`;
+    });
   }
 
   function buildUserMessage(payload, maxChars) {
@@ -180,6 +181,7 @@ Rules:
     if (title || host) parts.push(`PAGE: ${title}${host ? ` (${host})` : ""}`);
     parts.push(styleRule(payload.answerStyle));
     if (payload.profile === "ultra") parts.push("MODE: ULTRA SCAN. Check every clue on the page and double-check each answer before replying.");
+    if (payload.profile === "media") parts.push("MODE: MEDIA SCAN. The MEDIA INVENTORY below lists the images and videos on the page. Describe what each one shows, connect it to the task, and use it to answer. Page text may be thin — lean on the inventory.");
     if (payload.mode === "followup") {
       parts.push("MODE: FOLLOW-UP. Return exactly ONE item: \"question\" is the follow-up, \"answer\" is your reply in plain text.");
       if (Array.isArray(payload.priorItems) && payload.priorItems.length) {
@@ -236,12 +238,16 @@ Rules:
     return err;
   }
 
-  async function callOpenAI(r, system, user, maxTokens, jsonMode = true) {
+  async function callOpenAI(r, system, user, maxTokens, jsonMode = true, images = []) {
     const headers = { "content-type": "application/json" };
     if (r.apiKey) headers.authorization = `Bearer ${r.apiKey}`;
+    // Vision: OpenAI-compatible APIs take the user message as an array of parts.
+    const userContent = images.length
+      ? [{ type: "text", text: user }, ...images.map((img) => ({ type: "image_url", image_url: { url: img.dataUrl } }))]
+      : user;
     const body = {
       model: r.model,
-      messages: [{ role: "system", content: system }, { role: "user", content: user }],
+      messages: [{ role: "system", content: system }, { role: "user", content: userContent }],
       temperature: 0.2,
       max_tokens: maxTokens,
     };
@@ -263,11 +269,17 @@ Rules:
     return String(text);
   }
 
-  async function callGemini(r, system, user, maxTokens) {
+  async function callGemini(r, system, user, maxTokens, images = []) {
     const headers = { "content-type": "application/json", "x-goog-api-key": r.apiKey };
+    // Vision: Gemini takes inline_data parts next to the text part.
+    const userParts = [{ text: user }];
+    for (const img of images) {
+      const m = /^data:([^;,]+);base64,([\s\S]+)$/.exec(img.dataUrl || "");
+      if (m) userParts.push({ inline_data: { mime_type: m[1], data: m[2] } });
+    }
     const body = {
       systemInstruction: { parts: [{ text: system }] },
-      contents: [{ role: "user", parts: [{ text: user }] }],
+      contents: [{ role: "user", parts: userParts }],
       generationConfig: {
         temperature: 0.2,
         maxOutputTokens: Math.max(maxTokens, 4096),
@@ -284,8 +296,8 @@ Rules:
     return text;
   }
 
-  function callProvider(r, system, user, maxTokens) {
-    return r.api === "gemini" ? callGemini(r, system, user, maxTokens) : callOpenAI(r, system, user, maxTokens);
+  function callProvider(r, system, user, maxTokens, images = []) {
+    return r.api === "gemini" ? callGemini(r, system, user, maxTokens, images) : callOpenAI(r, system, user, maxTokens, true, images);
   }
 
   /* ---------- model discovery (model ids change; ask the provider what YOUR key can use) ---------- */
@@ -346,16 +358,16 @@ Rules:
   }
 
   // Run a call; if the model id is unknown / not allowed on this key, find one that is and retry once.
-  async function callWithRecovery(r, system, user, maxTokens) {
+  async function callWithRecovery(r, system, user, maxTokens, images = []) {
     try {
-      return { raw: await callProvider(r, system, user, maxTokens), model: r.model };
+      return { raw: await callProvider(r, system, user, maxTokens, images), model: r.model };
     } catch (e) {
       if (!e.modelProblem) throw e;
       let ids;
       try { ids = await listModelsFor(r); } catch { throw e; }
       const alt = pickModel(r, ids.filter((id) => id !== r.model));
       if (!alt) throw new Error(`${e.message} No other usable model was found for this key.`);
-      const raw = await callProvider({ ...r, model: alt }, system, user, maxTokens);
+      const raw = await callProvider({ ...r, model: alt }, system, user, maxTokens, images);
       return { raw, model: alt, switchedFrom: r.model };
     }
   }
@@ -409,6 +421,46 @@ Rules:
       nextStep: str(obj.nextStep),
       comparedWith: str(obj.comparedWith),
     };
+  }
+
+  /* ---------- media match: judge 1-2 pasted images against a prompt (vision) ---------- */
+  const VISION_SYSTEM_PROMPT = `You are NUTSHELL Vision, an image judge. You receive one PROMPT and one or two images.
+Reply with ONE JSON object and nothing else (no markdown fences, no commentary):
+{"best":"image1"|"image2"|"neither","match":0.0,"why":"one or two sentences"}
+
+- With two images: set "best" to the image that suits the PROMPT better ("image1" or "image2"); "match" is how well the winner matches, 0 to 1.
+- With one image: set "best" to "image1" if it suits the PROMPT, otherwise "neither"; "match" is 0 to 1.
+- Judge honestly against the PROMPT: subject, style, mood, composition, quality. If neither image fits, return "neither" with a low "match".
+- Plain text only inside strings: no markdown, no asterisks, no backticks, keep strings on one line.`;
+
+  async function pickImage({ prompt, images }) {
+    const text = String(prompt || "").trim();
+    if (!text) throw new Error("Add a prompt describing what the image should show.");
+    const list = (Array.isArray(images) ? images : [])
+      .map((im) => String(im?.dataUrl || ""))
+      .filter((d) => /^data:image\//.test(d))
+      .slice(0, 2);
+    if (!list.length) throw new Error("Paste at least one image first.");
+    const cfg = await loadConfig();
+    const chain = buildChain(cfg);
+    if (!chain.length) throw new Error("Add an API key in ⚙ settings first. Gemini handles images best.");
+    const labels = list.length === 2 ? "IMAGE 1 (first attached) vs IMAGE 2 (second attached)." : "A single IMAGE is attached.";
+    const user = `PROMPT:\n${text}\n\n${labels}\n\nWhich image best suits the prompt?`;
+    const failures = [];
+    for (const r of chain) {
+      try {
+        const out = await callWithRecovery(r, VISION_SYSTEM_PROMPT, user, 500, list.map((d) => ({ dataUrl: d })));
+        const obj = parseModelJSON(out.raw);
+        if (!obj) throw new Error("no usable JSON in the reply — does this model support images?");
+        const best = ["image1", "image2", "neither"].includes(String(obj.best)) ? String(obj.best) : "neither";
+        const matchNum = Number(obj.match);
+        const match = Number.isFinite(matchNum) ? Math.max(0, Math.min(1, matchNum)) : 0;
+        return { best, match, why: str(obj.why), model: out.model, switchedFrom: out.switchedFrom, count: list.length };
+      } catch (e) {
+        failures.push(`${r.label.split(" (")[0]}: ${e.message}`);
+      }
+    }
+    throw new Error(`${failures.join(" | ")} — your current model(s) may not accept images; Google AI Studio (Gemini) does.`);
   }
 
   /* ---------- public API ---------- */
@@ -473,5 +525,5 @@ Rules:
     return buildChain(cfg).length > 0;
   }
 
-  window.NutshellAI = { PROVIDERS, loadConfig, saveConfig, resolved, buildChain, hasProvider, solve, testProvider, listModels };
+  window.NutshellAI = { PROVIDERS, loadConfig, saveConfig, resolved, buildChain, hasProvider, solve, pickImage, testProvider, listModels };
 })();

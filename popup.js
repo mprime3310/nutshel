@@ -253,6 +253,7 @@ function scanPageForContext({ includeText = true, includeMedia = true } = {}) {
     ...[...document.images].slice(0, 24).map((img) => ({
       type: "image",
       alt: clean(img.alt || img.getAttribute("aria-label") || img.closest("figure")?.innerText || ""),
+      src: String(img.currentSrc || img.src || "").slice(0, 300),
     })),
     ...[...document.querySelectorAll("video")].slice(0, 12).map((video) => ({
       type: "video",
@@ -549,12 +550,20 @@ async function runAnalysis(profile = "standard") {
     // A pasted task still gets a lightweight field scan so Autofill keeps
     // working, but the fast path skips the expensive page-text/media passes.
     const ctx = await refreshContext(tab, {
-      includeText: !typedText || profile === "ultra",
+      includeText: !typedText || profile === "ultra" || profile === "media",
       includeMedia: profile === "media" || profile === "ultra",
     }).catch(() => null);
     let text = typedText;
     if (!text) text = ctx?.selection || ctx?.text || "";
-    if (!text && !ctx?.fields?.length) throw new Error("Add a question or scan the page first.");
+    const mediaCount = ctx?.media?.length || 0;
+    // A media scan may legitimately run on a picture-only page with little text:
+    // the inventory itself is the context, so don't demand readable text.
+    if (!text && !ctx?.fields?.length && !(profile === "media" && mediaCount)) {
+      throw new Error(profile === "media"
+        ? "No images or videos found on this page — try Quick scan instead."
+        : "Add a question or scan the page first.");
+    }
+    if (!text && profile === "media") text = "(no readable page text — work from the MEDIA INVENTORY below)";
 
     const data = await solve({
       text,
@@ -570,7 +579,9 @@ async function runAnalysis(profile = "standard") {
     items = data.items;
     render(items);
     renderNextStep(data);
-    showStatus(`${profile === "ultra" ? "Ultra Scan " : ""}found ${items.length} answer${items.length === 1 ? "" : "s"}${ctx?.fields?.length ? ` across ${ctx.fields.length} target fields.` : "."}`);
+    showStatus(profile === "media"
+      ? `Media scan indexed ${mediaCount} media item${mediaCount === 1 ? "" : "s"} and found ${items.length} answer${items.length === 1 ? "" : "s"}.`
+      : `${profile === "ultra" ? "Ultra Scan " : ""}found ${items.length} answer${items.length === 1 ? "" : "s"}${ctx?.fields?.length ? ` across ${ctx.fields.length} target fields.` : "."}`);
   } catch (e) {
     showError(e.message);
     if (/Add an API key/.test(e.message)) openSettings();
@@ -1776,6 +1787,187 @@ function initTypeDeck() {
   $("type-stop")?.addEventListener("click", () => { typingDeck = false; try { runOnPage(() => { window.__nutshellStopFill = true; }, []); } catch {} updateDeckStop(); showStatus("Stopping deck..."); });
   $("type-clear-all")?.addEventListener("click", async () => { typeDeck = []; await saveTypeDeck(); renderTypeDeck(); showStatus("Deck cleared."); });
 }
+/* ================================================================
+   MEDIA MATCH — paste 1-2 images + a prompt; the AI picks the image
+   that best suits the prompt (or judges a single image against it).
+   ================================================================ */
+const mediaImages = [null, null]; // data URLs, session-only (never stored)
+
+function setMediaOpen(open, persist = true) {
+  const body = $("media-body"); const btn = $("media-toggle");
+  if (!body || !btn) return;
+  body.classList.toggle("hidden", !open);
+  btn.setAttribute("aria-expanded", open ? "true" : "false");
+  if (persist) { try { chrome.storage.local.set({ mediaOpen: !!open }); } catch {} }
+}
+
+function mediaCount() { return mediaImages.filter(Boolean).length; }
+
+function paintMediaSlot(i) {
+  const thumb = $(`media-thumb-${i + 1}`);
+  const data = mediaImages[i];
+  if (thumb) {
+    if (data) { thumb.src = data; thumb.classList.remove("hidden"); }
+    else { thumb.removeAttribute("src"); thumb.classList.add("hidden"); }
+  }
+  const badge = $("media-count-inline");
+  if (badge) badge.textContent = `${mediaCount()}/2 images`;
+}
+
+function setMediaImage(i, dataUrl) {
+  if (!/^data:image\//.test(dataUrl || "")) { showError("That clipboard item isn't an image."); return; }
+  if (dataUrl.length > 8_000_000) { showError("Image is too large — paste one under ~6 MB."); return; }
+  mediaImages[i] = dataUrl;
+  paintMediaSlot(i);
+  clearError();
+  showStatus(`Image ${i + 1} loaded${mediaCount() === 2 ? " — hit Find best match." : "."}`);
+}
+
+async function readImageBlob(file) {
+  if (!file || !String(file.type || "").startsWith("image/")) return null;
+  // Downscale huge pastes so the provider payload stays reasonable.
+  try {
+    const bmp = await createImageBitmap(file);
+    const MAX = 1600;
+    const scale = Math.min(1, MAX / Math.max(bmp.width, bmp.height));
+    if (scale < 1) {
+      const cv = document.createElement("canvas");
+      cv.width = Math.round(bmp.width * scale);
+      cv.height = Math.round(bmp.height * scale);
+      cv.getContext("2d").drawImage(bmp, 0, 0, cv.width, cv.height);
+      bmp.close?.();
+      return cv.toDataURL("image/png");
+    }
+    bmp.close?.();
+  } catch { /* fall through to raw read */ }
+  return await new Promise((resolve) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result || ""));
+    fr.onerror = () => resolve("");
+    fr.readAsDataURL(file);
+  });
+}
+async function runMediaMatch() {
+  const prompt = String($("media-prompt")?.value || "").trim();
+  const imgs = mediaImages.filter(Boolean).map((d) => ({ dataUrl: d }));
+  if (!imgs.length) { showError("Paste at least one image first (Ctrl+V in a slot)."); return; }
+  if (!prompt) { showError("Describe the image you want in the prompt box."); return; }
+  const btn = $("media-run");
+  const out = $("media-result");
+  clearError();
+  if (btn) { btn.disabled = true; btn.textContent = "✦ Judging…"; }
+  out?.classList.remove("hidden");
+  if (out) out.innerHTML = '<p class="media-why">Looking at your image(s)…</p>';
+  try {
+    const res = await NutshellAI.pickImage({ prompt, images: imgs });
+    if (res.switchedFrom) showStatus(`"${res.switchedFrom}" can't read images, so NUTSHELL used ${res.model}.`);
+    const pct = Math.round((res.match || 0) * 100);
+    let verdict;
+    if (res.count === 2) {
+      verdict = res.best === "image1" ? "🏆 Image 1 best suits your prompt."
+        : res.best === "image2" ? "🏆 Image 2 best suits your prompt."
+        : "Neither image suits your prompt.";
+    } else {
+      verdict = res.best === "image1" ? "✅ Your image suits the prompt."
+        : "❌ Your image doesn't suit the prompt.";
+    }
+    if (out) {
+      out.innerHTML = "";
+      const head = document.createElement("div");
+      head.className = "media-verdict";
+      head.textContent = `${verdict} (${pct}% match)`;
+      const why = document.createElement("p");
+      why.className = "media-why";
+      why.textContent = res.why || "";
+      out.append(head, why);
+      out.classList.remove("hidden");
+    }
+    showStatus(`Media match done — ${pct}% confidence.`);
+  } catch (e) {
+    if (out) { out.classList.add("hidden"); out.innerHTML = ""; }
+    showError(e?.message || "Media match failed.");
+    if (/Add an API key/.test(e?.message || "")) openSettings();
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "✦ Find best match"; }
+  }
+}
+
+function initMediaStudio() {
+  // Restore open/collapsed state.
+  try { chrome.storage.local.get(["mediaOpen"], (s) => { if (s && typeof s.mediaOpen === "boolean") setMediaOpen(s.mediaOpen, false); }); } catch {}
+  $("media-toggle")?.addEventListener("click", () => setMediaOpen($("media-body")?.classList.contains("hidden"), true));
+
+  const fileInput = $("media-file");
+  let activeSlot = 0;
+
+  // Click a drop zone -> browse for a file into that slot.
+  document.querySelectorAll(".media-drop").forEach((zone) => {
+    const i = Number(zone.dataset.slot === "2" ? 1 : 0);
+    zone.addEventListener("click", () => { activeSlot = i; fileInput?.click(); });
+    zone.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); activeSlot = i; fileInput?.click(); } });
+    // Paste directly onto a drop zone.
+    zone.addEventListener("paste", async (e) => {
+      const file = [...(e.clipboardData?.items || [])].find((it) => it.type?.startsWith("image/"))?.getAsFile();
+      if (!file) return;
+      e.preventDefault();
+      const data = await readImageBlob(file);
+      if (data) setMediaImage(i, data);
+    });
+  });
+
+  fileInput?.addEventListener("change", async () => {
+    const file = fileInput.files?.[0];
+    fileInput.value = "";
+    if (!file) return;
+    const data = await readImageBlob(file);
+    if (data) setMediaImage(activeSlot, data);
+  });
+
+  // Paste anywhere in the panel: image -> first empty slot (or slot 1).
+  $("media-body")?.addEventListener("paste", async (e) => {
+    if (e.target?.closest?.(".media-drop")) return; // handled per-zone
+    const file = [...(e.clipboardData?.items || [])].find((it) => it.type?.startsWith("image/"))?.getAsFile();
+    if (!file) return;
+    e.preventDefault();
+    const i = mediaImages[0] ? (mediaImages[1] ? 0 : 1) : 0;
+    const data = await readImageBlob(file);
+    if (data) setMediaImage(i, data);
+  });
+
+  $("media-clipboard")?.addEventListener("click", async () => {
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const type = item.types.find((t) => t.startsWith("image/"));
+        if (!type) continue;
+        const blob = await item.getType(type);
+        const data = await readImageBlob(new File([blob], "clipboard.png", { type }));
+        if (data) {
+          const i = mediaImages[0] ? (mediaImages[1] ? 0 : 1) : 0;
+          setMediaImage(i, data);
+          return;
+        }
+      }
+      showError("Clipboard has no image — copy one first.");
+    } catch { showError("Clipboard blocked — click a slot and press Ctrl+V instead."); }
+  });
+
+  document.querySelectorAll(".media-clear").forEach((btn) => btn.addEventListener("click", () => {
+    const i = Number(btn.dataset.clear === "2" ? 1 : 0);
+    mediaImages[i] = null;
+    paintMediaSlot(i);
+  }));
+
+  $("media-clear-all")?.addEventListener("click", () => {
+    mediaImages[0] = mediaImages[1] = null;
+    paintMediaSlot(0); paintMediaSlot(1);
+    const p = $("media-prompt"); if (p) p.value = "";
+    $("media-result")?.classList.add("hidden");
+    showStatus("Media match cleared.");
+  });
+
+  $("media-run")?.addEventListener("click", runMediaMatch);
+}
 /* ---------- restore state / init ---------- */
 chrome.storage.local.get(["pendingText", "lastItems", "answerStyle", "fillMode", "fillWpm", "fillInstant", "fillWhere"], async (store) => {
   if (store.fillWhere === "choose") { fillWhere = "choose"; paintWhere(); }
@@ -1803,6 +1995,7 @@ chrome.storage.local.get(["pendingText", "lastItems", "answerStyle", "fillMode",
   await getState();
   renderActivationStatus();
   try { initTypeDeck(); } catch {}
+  try { initMediaStudio(); } catch {}
 
   await initAISettings();
   const boot = $("boot");

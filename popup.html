@@ -125,6 +125,42 @@
         </div>
       </section>
 
+      <section id="media-studio" class="typer media-studio">
+        <button id="media-toggle" class="typer-toggle" type="button" aria-expanded="false" aria-controls="media-body">
+          <span class="typer-toggle-text"><span class="typer-caret">▸</span> Media match <span id="media-count-inline" class="typer-count-inline">0/2 images</span></span>
+          <span class="typer-toggle-hint">paste image · prompt · compare</span>
+        </button>
+        <div id="media-body" class="typer-body hidden">
+          <p class="typer-tag">Paste one image to check it against your prompt, or two images (Image 1 vs Image 2) and the AI picks the one that best suits it.</p>
+          <div class="media-slots">
+            <div class="media-slot">
+              <div class="media-slot-head"><span class="typer-label">Image 1</span><button class="media-clear" type="button" data-clear="1" title="Remove image 1">✕</button></div>
+              <div class="media-drop" id="media-drop-1" data-slot="1" tabindex="0" role="button" aria-label="Paste or choose image 1">
+                <span class="media-drop-hint">Ctrl+V to paste<br />or click to browse</span>
+                <img id="media-thumb-1" class="media-thumb hidden" alt="" />
+              </div>
+            </div>
+            <div class="media-slot">
+              <div class="media-slot-head"><span class="typer-label">Image 2 <i>(optional — vs)</i></span><button class="media-clear" type="button" data-clear="2" title="Remove image 2">✕</button></div>
+              <div class="media-drop" id="media-drop-2" data-slot="2" tabindex="0" role="button" aria-label="Paste or choose image 2">
+                <span class="media-drop-hint">Ctrl+V to paste<br />or click to browse</span>
+                <img id="media-thumb-2" class="media-thumb hidden" alt="" />
+              </div>
+            </div>
+          </div>
+          <label class="typer-label" for="media-prompt">Prompt — what should the image show?</label>
+          <textarea id="media-prompt" class="typer-paste media-prompt" placeholder="e.g. A confident professional in a modern office, warm lighting, candid smile…"></textarea>
+          <div class="row typer-row">
+            <button id="media-run" class="fill" type="button">✦ Find best match</button>
+            <button id="media-clipboard" class="ghost" type="button">⧉ Paste image</button>
+            <button id="media-clear-all" class="ghost" type="button">✕ Clear</button>
+          </div>
+          <div id="media-result" class="media-result hidden"></div>
+          <p class="typer-hint">Images stay in this popup and are only sent to the AI provider you configured. Needs a vision-capable model — Gemini reads images best.</p>
+          <input id="media-file" type="file" accept="image/*" class="hidden" />
+        </div>
+      </section>
+
       <section id="preview" class="preview hidden">
         <div class="preview-head">
           <h2>Confirm autofill</h2>
