@@ -180,10 +180,17 @@ Rules:
     const host = hostOf(payload.url);
     if (title || host) parts.push(`PAGE: ${title}${host ? ` (${host})` : ""}`);
     parts.push(styleRule(payload.answerStyle));
+    const cv = String(payload.cv || "").trim();
+    if (cv) parts.push(`THE USER'S CV / BACKGROUND — background knowledge about who the user is. Use it to answer as this person (their experience, skills, wording). Priority rule: anything about the PAGE content is answered from the page text and fields below; the CV only supplies the user's own experience. Never contradict the CV, and never invent personal identifiers (full name, email, phone, address, ID numbers, payment details) unless they appear in the CV.\n${cv.slice(0, 12000)}`);
     if (payload.profile === "ultra") parts.push("MODE: ULTRA SCAN. Check every clue on the page and double-check each answer before replying.");
     if (payload.profile === "media") parts.push("MODE: MEDIA SCAN. The MEDIA INVENTORY below lists the images and videos on the page. Describe what each one shows, connect it to the task, and use it to answer. Page text may be thin — lean on the inventory.");
+    if (payload.mode === "fill-as-me") parts.push("MODE: FILL AS ME. Return one ITEM per answerable field listed below. Each item MUST have \"fieldId\" copied exactly from the square brackets and a \"fill\" value with the exact text to type. Answer open fields as the user described by the CV (no CV saved: use sensible general knowledge). Short text fields get short answers; long-text fields get a complete, confident paragraph in first person. Never invent personal identifiers (full name, email, phone, address, ID numbers, payment details) unless they appear in the CV — leave \"fill\" empty for those and explain in \"why\".");
     if (payload.mode === "followup") {
       parts.push("MODE: FOLLOW-UP. Return exactly ONE item: \"question\" is the follow-up, \"answer\" is your reply in plain text.");
+      // The follow-up question is usually about the page — always show the model the page text.
+      if (String(payload.pageText || "").trim()) {
+        parts.push(`CURRENT PAGE TEXT (use this to answer questions about the page):\n${String(payload.pageText).slice(0, maxChars)}`);
+      }
       if (Array.isArray(payload.priorItems) && payload.priorItems.length) {
         parts.push("EARLIER ANSWERS:\n" + payload.priorItems.map((i) => `Q: ${i.question}\nA: ${i.answer}`).join("\n\n"));
       }

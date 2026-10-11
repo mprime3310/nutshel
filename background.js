@@ -70,7 +70,7 @@ function openNutshellSidebar(panelUrl) {
   close.textContent = "×";
   close.title = "Close NUTSHELL";
   Object.assign(close.style, {
-    marginLeft: "auto",
+    marginLeft: "4px",
     border: "0",
     borderRadius: "6px",
     width: "22px",
@@ -81,6 +81,45 @@ function openNutshellSidebar(panelUrl) {
     font: "700 20px/18px system-ui, sans-serif",
   });
   close.addEventListener("click", () => host.remove());
+  const min = document.createElement("button");
+  min.type = "button";
+  min.textContent = "–";
+  min.title = "Minimize NUTSHELL";
+  Object.assign(min.style, {
+    marginLeft: "auto",
+    border: "0",
+    borderRadius: "6px",
+    width: "22px",
+    height: "22px",
+    color: "#0d0716",
+    background: "rgba(255,255,255,.45)",
+    cursor: "pointer",
+    font: "700 18px/20px system-ui, sans-serif",
+  });
+  let minimized = false;
+  let prevBox = null;
+  min.addEventListener("click", () => {
+    minimized = !minimized;
+    if (minimized) {
+      prevBox = { width: host.style.width, height: host.style.height, minHeight: host.style.minHeight };
+      frame.style.display = "none";
+      host.style.width = "240px";
+      host.style.height = "30px";
+      host.style.minHeight = "30px";
+      host.style.maxHeight = "30px";
+      min.textContent = "▣";
+      min.title = "Restore NUTSHELL";
+    } else {
+      frame.style.display = "block";
+      host.style.width = prevBox?.width || "";
+      host.style.height = prevBox?.height || "";
+      host.style.minHeight = prevBox?.minHeight || "380px";
+      host.style.maxHeight = "";
+      min.textContent = "–";
+      min.title = "Minimize NUTSHELL";
+    }
+  });
+  grip.appendChild(min);
   grip.appendChild(close);
 
   const frame = document.createElement("iframe");
@@ -98,7 +137,7 @@ function openNutshellSidebar(panelUrl) {
 
   let pointer = null;
   grip.addEventListener("pointerdown", (event) => {
-    if (event.target === close) return;
+    if (event.target === close || event.target === min) return;
     const rect = host.getBoundingClientRect();
     pointer = { id: event.pointerId, x: event.clientX, y: event.clientY, left: rect.left, top: rect.top };
     grip.setPointerCapture(event.pointerId);

@@ -52,6 +52,16 @@
       </div>
       <p id="ai-note" class="api-note"></p>
       <p class="api-note">Your key is stored only in this browser. Page content is sent straight to the provider you pick, with no NUTSHELL server in between. Free tiers of some providers may use your data to improve their products.</p>
+
+      <label for="cv-name">My CV / resume</label>
+      <input id="cv-name" type="text" placeholder="e.g. Marketing CV" autocomplete="off" />
+      <label for="cv-text">CV text</label>
+      <textarea id="cv-text" placeholder="Paste your CV here — questions are answered as you, using this experience."></textarea>
+      <button id="cv-upload" class="ghost" type="button">📄 Upload PDF / DOCX / TXT</button>
+      <button id="cv-save" class="ghost" type="button">＋ Save CV</button>
+      <input id="cv-file" type="file" accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" class="hidden" />
+      <div id="cv-list" class="cv-list"></div>
+      <p class="api-note">Save as many CVs as you like — only the one marked "In use" is sent with your questions.</p>
       </div>
     </section>
 
@@ -193,6 +203,7 @@
         <div class="followup-head">
           <h2>Live interview</h2>
           <p class="followup-tag">Choose how much detail you want, then ask by text or microphone.</p>
+          <p id="cv-indicator" class="cv-indicator hidden"></p>
         </div>
         <div class="answer-style" role="group" aria-label="Answer detail">
           <button type="button" class="style-choice" data-answer-style="short">Short</button>
@@ -208,6 +219,10 @@
           <button id="listen" class="ghost listen">◉ Start listening</button>
           <button id="thread-clear" class="ghost">⟲ Clear chat</button>
         </div>
+        <div class="asme-row">
+          <button id="asme-fill" class="fill asme-btn" type="button" title="Scan this page's fields, then let the AI draft answers from your active CV (or its own knowledge) and drop them into the confirm-autofill preview">✧ Fill page as me</button>
+          <span id="asme-source" class="asme-source"></span>
+        </div>
       </section>
 
       <p id="status" class="status hidden"></p>
@@ -221,6 +236,7 @@
     <footer>
       Powered by NUTSHELL Technologies
     </footer>
+    <script src="lib/pdf.min.js"></script>
     <script src="ai.js"></script>
     <script src="popup.js"></script>
   </body>

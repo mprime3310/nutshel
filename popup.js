@@ -571,6 +571,7 @@ async function runAnalysis(profile = "standard") {
       title: tab?.title || ctx?.heading || "",
       fields: ctx?.fields || [],
       media: ctx?.media || [],
+      cv: activeCvText(),
       profile,
       history: [],
       lessons: [],
@@ -1143,6 +1144,51 @@ async function runDryRun(candidateItems = items) {
   }
 }
 
+/* ---------- Fill page as me: scan fields, draft fills from CV/AI, reuse confirm preview ---------- */
+function paintAsmeSource() {
+  const el = $("asme-source");
+  if (!el) return;
+  const cv = cvLib.find((c) => c.id === activeCvId);
+  el.textContent = cv ? `drafting as: ${cv.name || "your CV"}` : "no CV yet — using AI knowledge";
+}
+async function fillAsMe() {
+  clearError();
+  const btn = $("asme-fill");
+  const tab = await targetTab().catch(() => null);
+  if (!tab) return showError("Open a website tab beside NUTSHELL first.");
+  btn.disabled = true;
+  loaderNote(cvLib.length && activeCvId ? "Drafting answers as you from your CV…" : "Drafting answers from AI knowledge…");
+  loader.classList.remove("hidden");
+  try {
+    const ctx = await refreshContext(tab, { includeText: true, includeMedia: false });
+    if (!ctx?.fields?.length) throw new Error("No fillable fields found on this page.");
+    const cv = activeCvText();
+    const data = await solve({
+      mode: "fill-as-me",
+      text: `Fill every answerable field on this page as the user. Return one item per field with "fieldId" and "fill".`,
+      pageText: ctx?.text || "",
+      url: tab?.url || "",
+      title: tab?.title || ctx?.heading || "",
+      fields: ctx.fields,
+      cv,
+      answerStyle,
+      history: [],
+      lessons: [],
+    });
+    const drafted = (data.items || []).filter((i) => i.fieldId && (i.fill || i.answer));
+    if (!drafted.length) throw new Error("The AI couldn't draft fills for these fields — try Analyze instead.");
+    // Hand the drafts straight to the existing confirm-autofill preview.
+    await runDryRun(drafted.map((i) => ({ ...i, fill: i.fill || i.answer })));
+    showStatus(`${drafted.length} field${drafted.length === 1 ? "" : "s"} drafted ${cv ? "from your CV" : "from AI knowledge"} — review, then Fill approved.`);
+  } catch (e) {
+    showError(e.message);
+    if (/Add an API key/.test(e.message)) openSettings();
+  } finally {
+    loader.classList.add("hidden");
+    btn.disabled = false;
+  }
+}
+
 /* ---------- follow-up ---------- */
 let turns = [];
 function renderThread() {
@@ -1201,10 +1247,12 @@ async function askFollowUp() {
     const data = await solve({
       mode: "followup",
       text: `FOLLOW-UP QUESTION FROM THE USER ABOUT THIS PAGE:\n${question}\n\nReturn a single item whose "question" is the follow-up and whose "answer" is the reply.`,
+      pageText: ctx?.text || "",
       url: tab?.url || "",
       title: tab?.title || ctx?.heading || "",
       fields: ctx?.fields || [],
       media: ctx?.media || [],
+      cv: activeCvText(),
       answerStyle,
       history: [],
       lessons: [],
@@ -1265,43 +1313,68 @@ function toggleListening() {
   if (listening) { stopListening(); return; }
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SpeechRecognition) return showError("Live listening needs Chrome's speech recognition. You can still ask in the chat.");
-  recognition = new SpeechRecognition();
-  recognition.continuous = true;
-  recognition.interimResults = true;
-  recognition.lang = navigator.language || "en-US";
-  voiceBuffer = ($("followup").value || "").trim();
-  recognition.onstart = () => { setListening(true); showStatus("Listening — ask a question and NUTSHELL will send it automatically."); };
-  recognition.onresult = (event) => {
-    let interim = "";
-    let finalChunk = "";
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const text = event.results[i][0].transcript.trim();
-      if (event.results[i].isFinal) finalChunk += `${text} `;
-      else interim += text;
-    }
-    if (finalChunk) {
-      voiceBuffer = `${voiceBuffer} ${finalChunk}`.trim();
-      $("followup").value = voiceBuffer;
-      showStatus(`Heard: ${voiceBuffer}`);
-      if (questionDetected(voiceBuffer)) queueVoiceQuestion();
-    } else if (interim) {
-      const preview = `${voiceBuffer} ${interim}`.trim();
-      $("followup").value = preview;
-      showStatus(`Listening: ${preview}`);
-    }
-  };
-  recognition.onerror = (event) => {
-    if (event.error !== "aborted") showError("Listening stopped. Check microphone permission, then try again.");
-    setListening(false);
-  };
-  recognition.onend = () => {
-    recognition = null;
-    if (listening) {
+  // Grab the mic ourselves first. SpeechRecognition inside the sidebar iframe
+  // silently fails with "not-allowed" unless the mic permission is already
+  // granted; this call prompts for it properly and unblocks recognition.
+  const begin = () => {
+    try {
+      recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = navigator.language || "en-US";
+      voiceBuffer = ($("followup").value || "").trim();
+      recognition.onstart = () => { setListening(true); showStatus("Listening — ask a question and NUTSHELL will send it automatically."); };
+      recognition.onresult = (event) => {
+        let interim = "";
+        let finalChunk = "";
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const text = event.results[i][0].transcript.trim();
+          if (event.results[i].isFinal) finalChunk += `${text} `;
+          else interim += text;
+        }
+        if (finalChunk) {
+          voiceBuffer = `${voiceBuffer} ${finalChunk}`.trim();
+          $("followup").value = voiceBuffer;
+          showStatus(`Heard: ${voiceBuffer}`);
+          if (questionDetected(voiceBuffer)) queueVoiceQuestion();
+        } else if (interim) {
+          const preview = `${voiceBuffer} ${interim}`.trim();
+          $("followup").value = preview;
+          showStatus(`Listening: ${preview}`);
+        }
+      };
+      recognition.onerror = (event) => {
+        if (event.error === "aborted") return;
+        if (event.error === "no-speech") return; // silence — onend will restart
+        showError(event.error === "not-allowed" || event.error === "service-not-allowed"
+          ? "Microphone blocked — allow mic access for this site, then tap Start listening again."
+          : `Listening stopped (${event.error}). Tap Start listening to try again.`);
+        setListening(false);
+      };
+      recognition.onend = () => {
+        recognition = null;
+        // Chrome ends silent sessions after a few seconds — keep listening
+        // until the user actually taps Stop.
+        if (listening) {
+          try { begin(); } catch { setListening(false); showStatus("Listening paused. Tap Start listening to continue."); }
+          return;
+        }
+      };
+      recognition.start();
+    } catch {
+      recognition = null;
       setListening(false);
-      showStatus("Listening paused. Tap Start listening to continue.");
+      showError("Couldn't start the microphone — tap Start listening again.");
     }
   };
-  recognition.start();
+  if (navigator.mediaDevices?.getUserMedia) {
+    navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+      stream.getTracks().forEach((track) => track.stop());
+      begin();
+    }).catch(() => showError("Microphone access denied — allow the mic for this site, then try again."));
+  } else {
+    begin();
+  }
 }
 
 /* ---------- wiring ---------- */
@@ -1633,6 +1706,7 @@ $("ask").addEventListener("click", () => {
   void askFollowUp();
 });
 $("listen").addEventListener("click", toggleListening);
+$("asme-fill")?.addEventListener("click", () => void fillAsMe());
 document.querySelectorAll(".style-choice").forEach((button) => {
   button.addEventListener("click", async () => {
     answerStyle = button.dataset.answerStyle || "detailed";
@@ -1787,6 +1861,205 @@ function initTypeDeck() {
   $("type-stop")?.addEventListener("click", () => { typingDeck = false; try { runOnPage(() => { window.__nutshellStopFill = true; }, []); } catch {} updateDeckStop(); showStatus("Stopping deck..."); });
   $("type-clear-all")?.addEventListener("click", async () => { typeDeck = []; await saveTypeDeck(); renderTypeDeck(); showStatus("Deck cleared."); });
 }
+/* ---------- CV file upload: PDF via pdf.js, DOCX via native unzip ---------- */
+async function inflateRaw(bytes) {
+  const ds = new DecompressionStream("deflate-raw");
+  const stream = new Blob([bytes]).stream().pipeThrough(ds);
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+// Minimal ZIP central-directory walk: find one entry by name and decompress it.
+async function unzipEntry(bytes, wanted) {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let eocd = -1;
+  for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 65558); i--) {
+    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error("Not a readable DOCX (zip) file.");
+  const count = dv.getUint16(eocd + 10, true);
+  let off = dv.getUint32(eocd + 16, true);
+  for (let n = 0; n < count; n++) {
+    if (dv.getUint32(off, true) !== 0x02014b50) break;
+    const method = dv.getUint16(off + 10, true);
+    const compSize = dv.getUint32(off + 20, true);
+    const nameLen = dv.getUint16(off + 28, true);
+    const extraLen = dv.getUint16(off + 30, true);
+    const cmtLen = dv.getUint16(off + 32, true);
+    const localOff = dv.getUint32(off + 42, true);
+    const name = new TextDecoder().decode(bytes.subarray(off + 46, off + 46 + nameLen)).replace(/\\/g, "/");
+    if (name === wanted) {
+      const lNameLen = dv.getUint16(localOff + 26, true);
+      const lExtraLen = dv.getUint16(localOff + 28, true);
+      const start = localOff + 30 + lNameLen + lExtraLen;
+      const data = bytes.subarray(start, start + compSize);
+      if (method === 0) return data;
+      if (method === 8) return await inflateRaw(data);
+      throw new Error("This DOCX uses compression this reader can't handle.");
+    }
+    off += 46 + nameLen + extraLen + cmtLen;
+  }
+  throw new Error("word/document.xml not found inside the DOCX.");
+}
+function docxXmlToText(xml) {
+  let t = String(xml);
+  t = t.replace(/<w:tab[^>]*\/>/g, "\t");
+  t = t.replace(/<w:br[^>]*\/>/g, "\n");
+  t = t.replace(/<\/w:p>/g, "\n");
+  t = t.replace(/<[^>]+>/g, "");
+  t = t.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'");
+  return t.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+async function extractDocxText(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const xml = await unzipEntry(bytes, "word/document.xml");
+  return docxXmlToText(new TextDecoder().decode(xml));
+}
+async function extractPdfText(file) {
+  const lib = window.pdfjsLib;
+  if (!lib) throw new Error("PDF support didn't load — reload the extension, then try again.");
+  lib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL("lib/pdf.worker.min.js");
+  const doc = await lib.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+  const pages = [];
+  for (let p = 1; p <= doc.numPages; p++) {
+    const page = await doc.getPage(p);
+    const content = await page.getTextContent();
+    let line = "";
+    const lines = [];
+    for (const item of content.items) {
+      if (typeof item.str === "string") line += item.str;
+      if (item.hasEOL) { lines.push(line.trimEnd()); line = ""; }
+    }
+    if (line.trim()) lines.push(line.trimEnd());
+    pages.push(lines.join("\n"));
+    page.cleanup?.();
+  }
+  await doc.destroy?.();
+  return pages.join("\n\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+async function extractCvFileText(file) {
+  const name = String(file?.name || "");
+  const type = String(file?.type || "");
+  if (/\.pdf$/i.test(name) || type === "application/pdf") return await extractPdfText(file);
+  if (/\.docx$/i.test(name) || type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") return await extractDocxText(file);
+  if (/\.txt$/i.test(name) || type.startsWith("text/")) return (await file.text()).trim();
+  throw new Error("Unsupported file — upload a PDF, DOCX or TXT.");
+}
+
+/* ================================================================
+   CV LIBRARY — save many CVs in ⚙, mark one "In use"; that CV is
+   sent with questions so NUTSHELL answers as you.
+   ================================================================ */
+let cvLib = [];
+let activeCvId = "";
+
+async function loadCvLibrary() {
+  try {
+    const s = await chrome.storage.local.get(["cvLibrary", "activeCvId"]);
+    cvLib = Array.isArray(s.cvLibrary) ? s.cvLibrary : [];
+    activeCvId = String(s.activeCvId || "");
+    if (!cvLib.some((c) => c.id === activeCvId)) activeCvId = cvLib[0]?.id || "";
+  } catch { cvLib = []; activeCvId = ""; }
+}
+async function saveCvLibrary() {
+  try { await chrome.storage.local.set({ cvLibrary: cvLib, activeCvId }); } catch {}
+}
+function activeCvText() {
+  const cv = cvLib.find((c) => c.id === activeCvId);
+  return cv ? String(cv.text || "").trim() : "";
+}
+function paintCvIndicator() {
+  const el = $("cv-indicator");
+  if (el) {
+    const cv = cvLib.find((c) => c.id === activeCvId);
+    if (cv) { el.textContent = `Answering as: ${cv.name || "Untitled CV"}`; el.classList.remove("hidden"); }
+    else { el.textContent = ""; el.classList.add("hidden"); }
+  }
+  paintAsmeSource();
+}
+function renderCvList() {
+  const list = $("cv-list");
+  if (!list) return;
+  list.innerHTML = "";
+  if (!cvLib.length) {
+    const empty = document.createElement("p");
+    empty.className = "cv-empty";
+    empty.textContent = "No CVs saved yet — paste one above and hit Save CV.";
+    list.appendChild(empty);
+    paintCvIndicator();
+    return;
+  }
+  cvLib.forEach((cv) => {
+    const row = document.createElement("div");
+    row.className = "cv-item" + (cv.id === activeCvId ? " active" : "");
+    const name = document.createElement("span");
+    name.className = "cv-item-name";
+    name.textContent = cv.name || "Untitled CV";
+    name.title = String(cv.text || "").slice(0, 500);
+    const meta = document.createElement("span");
+    meta.className = "cv-item-meta";
+    meta.textContent = `${Math.round((cv.text || "").length / 1000)}k chars${cv.id === activeCvId ? " · in use" : ""}`;
+    const use = document.createElement("button");
+    use.className = "ghost";
+    use.type = "button";
+    use.textContent = cv.id === activeCvId ? "✓ In use" : "Use";
+    use.addEventListener("click", async () => {
+      activeCvId = cv.id;
+      await saveCvLibrary();
+      renderCvList();
+      showStatus(`Active CV: ${cv.name || "Untitled CV"} — answers will come as this person.`);
+    });
+    const del = document.createElement("button");
+    del.className = "ghost";
+    del.type = "button";
+    del.textContent = "✕";
+    del.title = "Delete this CV";
+    del.addEventListener("click", async () => {
+      cvLib = cvLib.filter((c) => c.id !== cv.id);
+      if (activeCvId === cv.id) activeCvId = cvLib[0]?.id || "";
+      await saveCvLibrary();
+      renderCvList();
+    });
+    row.append(name, meta, use, del);
+    list.appendChild(row);
+  });
+  paintCvIndicator();
+}
+async function initCvSettings() {
+  await loadCvLibrary();
+  renderCvList();
+  // Upload a PDF/DOCX/TXT -> extract its text into the editor for review.
+  const fileInput = $("cv-file");
+  $("cv-upload")?.addEventListener("click", () => fileInput?.click());
+  fileInput?.addEventListener("change", async () => {
+    const file = fileInput.files?.[0];
+    fileInput.value = "";
+    if (!file) return;
+    aiNote(`Reading ${file.name}…`);
+    try {
+      const text = await extractCvFileText(file);
+      if (!text) throw new Error("No readable text found in that file (a scanned/image-only PDF can't be read).");
+      const nameEl = $("cv-name");
+      if (nameEl && !nameEl.value.trim()) nameEl.value = file.name.replace(/\.(pdf|docx?|txt)$/i, "");
+      $("cv-text").value = text.slice(0, 60000);
+      aiNote(`Loaded "${file.name}" (${Math.round(text.length / 1000)}k chars) — review, then hit Save CV.`, "ok");
+    } catch (e) {
+      aiNote(e?.message || "Couldn't read that file.", "bad");
+    }
+  });
+  $("cv-save")?.addEventListener("click", async () => {
+    const name = String($("cv-name")?.value || "").trim();
+    const text = String($("cv-text")?.value || "").trim();
+    if (!text) { aiNote("Paste your CV text first.", "bad"); return; }
+    const cv = { id: `cv${Date.now().toString(36)}`, name: name || `CV ${cvLib.length + 1}`, text: text.slice(0, 60000), at: Date.now() };
+    cvLib.push(cv);
+    if (!activeCvId) activeCvId = cv.id; // first saved CV becomes active automatically
+    await saveCvLibrary();
+    $("cv-name").value = "";
+    $("cv-text").value = "";
+    renderCvList();
+    aiNote(`Saved "${cv.name}"${activeCvId === cv.id ? " — it's the active CV." : "."}`, "ok");
+  });
+}
+
 /* ================================================================
    MEDIA MATCH — paste 1-2 images + a prompt; the AI picks the image
    that best suits the prompt (or judges a single image against it).
@@ -1996,6 +2269,7 @@ chrome.storage.local.get(["pendingText", "lastItems", "answerStyle", "fillMode",
   renderActivationStatus();
   try { initTypeDeck(); } catch {}
   try { initMediaStudio(); } catch {}
+  try { void initCvSettings(); } catch {}
 
   await initAISettings();
   const boot = $("boot");

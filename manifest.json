@@ -24,7 +24,9 @@
         "popup.html",
         "popup.css",
         "popup.js",
-        "icon.png"
+        "icon.png",
+        "lib/pdf.min.js",
+        "lib/pdf.worker.min.js"
       ],
       "matches": [
         "<all_urls>"
