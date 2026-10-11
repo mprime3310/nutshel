@@ -470,6 +470,40 @@ Reply with ONE JSON object and nothing else (no markdown fences, no commentary):
     throw new Error(`${failures.join(" | ")} — your current model(s) may not accept images; Google AI Studio (Gemini) does.`);
   }
 
+  /* ---------- generic ask: raw text/JSON completion for ported features ---------- */
+  async function ask({ system = "", user = "", images = [], maxTokens = 2048 } = {}) {
+    const cfg = await loadConfig();
+    const chain = buildChain(cfg);
+    if (!chain.length) throw new Error("Add an API key in ⚙ settings first. Groq and Google AI Studio both give free keys.");
+    const imgs = (Array.isArray(images) ? images : []).map((im) => ({ dataUrl: String(im?.dataUrl || im || "") })).filter((im) => /^data:image\//.test(im.dataUrl)).slice(0, 8);
+    const failures = [];
+    for (const r of chain) {
+      try {
+        const out = await callWithRecovery(r, system || "You are NUTSHELL, a precise assistant. Reply exactly as requested.", user, maxTokens, imgs);
+        if (!out.raw) throw new Error("empty reply from model");
+        return { raw: out.raw, model: out.model, provider: r.id, switchedFrom: out.switchedFrom };
+      } catch (e) {
+        if (/image|vision|multimodal/i.test(String(e?.message || "")) && imgs.length) continue;
+        failures.push(`${r.label.split(" (")[0]}: ${e.message}`);
+      }
+    }
+    throw new Error(`${failures.join(" | ")}${imgs.length ? " — your model may not accept images; Google AI Studio (Gemini) does." : ""}`);
+  }
+
+  // Same as ask() but returns the parsed JSON object (strips ```json fences,
+  // finds the first {...} or [...] block). Used by ported agent-training.
+  async function askJson(opts = {}) {
+    const res = await ask(opts);
+    let raw = String(res.raw || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "").trim();
+    const objStart = raw.search(/[{[]/);
+    const closer = objStart >= 0 ? (raw[objStart] === "{" ? "}" : "]") : "";
+    const end = closer ? raw.lastIndexOf(closer) : -1;
+    if (objStart >= 0 && end > objStart) raw = raw.slice(objStart, end + 1);
+    let parsed;
+    try { parsed = JSON.parse(raw); } catch { return { ...res, json: null }; }
+    return { ...res, json: parsed };
+  }
+
   /* ---------- public API ---------- */
   async function solve(payload) {
     const cfg = await loadConfig();
@@ -532,5 +566,5 @@ Reply with ONE JSON object and nothing else (no markdown fences, no commentary):
     return buildChain(cfg).length > 0;
   }
 
-  window.NutshellAI = { PROVIDERS, loadConfig, saveConfig, resolved, buildChain, hasProvider, solve, pickImage, testProvider, listModels };
+  window.NutshellAI = { PROVIDERS, loadConfig, saveConfig, resolved, buildChain, hasProvider, solve, pickImage, ask, askJson, testProvider, listModels };
 })();

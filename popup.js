@@ -2282,4 +2282,370 @@ chrome.storage.local.get(["pendingText", "lastItems", "answerStyle", "fillMode",
     bootCopy.textContent = "NUTSHELL is set.";
   }
   setTimeout(() => boot.classList.add("boot-out"), 1150);
+
+  /* ---- ported features: wire mode tabs, profiles, agents, identity, tutorial ---- */
+  try { initPortedFeatures(); } catch (err) { console.warn("ported init failed", err); }
 });
+
+/* =====================================================================
+   PORTED FEATURES (from folder 46) — violet theme, billing removed.
+   Profiles/memory, Specialist AI agents, Identity verify, Reset attempt,
+   Use selection, Data export/import, Tutorial, mode tabs.
+   ===================================================================== */
+const MEMORY_FIELDS = [
+  { key: "fullName", label: "Full name", placeholder: "Full name" },
+  { key: "firstName", label: "First name", placeholder: "First name" },
+  { key: "lastName", label: "Last name", placeholder: "Last name" },
+  { key: "name", label: "Preferred name", placeholder: "Preferred name" },
+  { key: "email", label: "Email", placeholder: "you@example.com" },
+  { key: "phone", label: "Phone", placeholder: "+1 555 0100" },
+  { key: "linkedin", label: "LinkedIn", placeholder: "https://linkedin.com/in/…" },
+  { key: "website", label: "Website / portfolio", placeholder: "https://…" },
+  { key: "location", label: "Location", placeholder: "City, country" },
+  { key: "jobTitle", label: "Job title", placeholder: "Current role" },
+  { key: "company", label: "Company", placeholder: "Current organization" },
+  { key: "education", label: "Education", placeholder: "Degrees, institutions, dates", multi: true },
+  { key: "skills", label: "Skills", placeholder: "Core skills and tools", multi: true },
+  { key: "experience", label: "Experience", placeholder: "Roles, achievements, projects", multi: true },
+  { key: "bio", label: "Bio", placeholder: "About you, your background and goals…", multi: true },
+];
+let editingProfileIndex = -1;
+let addingProfile = false;
+let profileCountForDraft = -1;
+async function loadMemories() {
+  const stored = await chrome.storage.local.get("nutshellProfiles");
+  return Array.isArray(stored.nutshellProfiles) ? stored.nutshellProfiles.slice(0, 10) : [];
+}
+async function saveMemories(list) { await chrome.storage.local.set({ nutshellProfiles: (list || []).slice(0, 10) }); }
+function noteMemories(message) { const n = $("memories-note"); if (n) n.textContent = message || ""; }
+function readMemorySlot(wrap) {
+  const out = {};
+  MEMORY_FIELDS.forEach((f) => { const el = wrap.querySelector(`[data-mfield="${f.key}"]`); out[f.key] = String(el?.value || "").trim(); });
+  return out;
+}
+
+function buildMemorySlot(index, profile) {
+  const wrap = document.createElement("article");
+  wrap.className = "memory-slot";
+  const expanded = addingProfile ? index === profileCountForDraft : index === editingProfileIndex;
+  const name = profile.fullName || [profile.firstName, profile.lastName].filter(Boolean).join(" ") || profile.name || "New profile";
+  const summary = document.createElement("button");
+  summary.className = "profile-name"; summary.type = "button"; summary.textContent = name;
+  summary.setAttribute("aria-expanded", String(expanded));
+  summary.addEventListener("click", () => { editingProfileIndex = expanded ? -1 : index; addingProfile = false; renderMemories(); });
+  wrap.appendChild(summary);
+  if (!expanded) return wrap;
+  const editor = document.createElement("div");
+  editor.className = "profile-editor";
+  MEMORY_FIELDS.forEach((field) => {
+    const control = field.multi ? document.createElement("textarea") : document.createElement("input");
+    control.className = field.multi ? "memory-input memory-textarea" : "memory-input";
+    control.placeholder = field.placeholder; control.dataset.mfield = field.key; control.value = profile[field.key] || "";
+    control.setAttribute("aria-label", field.label);
+    editor.appendChild(control);
+  });
+  const actions = document.createElement("div");
+  actions.className = "memory-action-row";
+  const save = document.createElement("button");
+  save.className = "fill memory-save"; save.type = "button"; save.textContent = addingProfile ? "Save profile" : "Save changes";
+  save.addEventListener("click", async () => {
+    const value = readMemorySlot(editor);
+    if (!value.fullName && !value.name && !value.email) return noteMemories("Add a name or email before saving this profile.");
+    const list = await loadMemories();
+    if (addingProfile) list.push(value); else list[index] = value;
+    await saveMemories(list);
+    editingProfileIndex = addingProfile ? list.length - 1 : index;
+    addingProfile = false;
+    noteMemories("Profile saved.");
+    renderMemories();
+  });
+  actions.appendChild(save);
+  if (!addingProfile) {
+    const remove = document.createElement("button");
+    remove.className = "ghost profile-delete"; remove.type = "button"; remove.textContent = "Delete";
+    remove.addEventListener("click", async () => {
+      const list = await loadMemories(); list.splice(index, 1); await saveMemories(list);
+      editingProfileIndex = -1; noteMemories("Profile deleted."); renderMemories();
+    });
+    actions.appendChild(remove);
+  }
+  editor.appendChild(actions);
+  wrap.appendChild(editor);
+  return wrap;
+}
+async function renderMemories() {
+  const slotEl = $("memories-slots");
+  if (!slotEl) return;
+  slotEl.innerHTML = "";
+  const profiles = await loadMemories();
+  profileCountForDraft = profiles.length;
+  profiles.forEach((profile, index) => slotEl.appendChild(buildMemorySlot(index, profile)));
+  if (addingProfile) slotEl.appendChild(buildMemorySlot(profiles.length, {}));
+  const add = $("profile-add");
+  if (add) { add.disabled = profiles.length >= 10 || addingProfile; add.textContent = profiles.length >= 10 ? "10 profiles saved" : "＋ Add profile"; }
+}
+async function injectMemoryValue(label, value) {
+  clearError();
+  if (!value) return showError(`This profile's ${label.toLowerCase()} is empty — save a value first.`);
+  showStatus(`Looking for a “${label}” field on the page…`);
+  await runDryRun([{ question: label, answer: value, fill: value, confidence: 1, kind: "short text" }]);
+}
+async function injectAllMemoryValues(profile) {
+  clearError();
+  const candidates = MEMORY_FIELDS
+    .map(({ key, label }) => ({ question: label, answer: String(profile[key] || "").trim(), fill: String(profile[key] || "").trim(), confidence: 1, kind: "long text" }))
+    .filter((entry) => entry.fill);
+  if (!candidates.length) return showError("This profile has no saved details to inject.");
+  showStatus("Matching all saved profile details to page fields for your review…");
+  await runDryRun(candidates);
+}
+
+
+/* ---------------- Specialist AI agents ---------------- */
+function remainingTrainingTime(agent) { return Math.max(0, Number(agent.readyAt || 0) - Date.now()); }
+function formatTrainingTime(ms) {
+  const total = Math.ceil(ms / 1000); const m = Math.floor(total / 60); const s = total % 60;
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+async function loadAgents() {
+  const stored = await chrome.storage.local.get("nutshellAgents");
+  return Array.isArray(stored.nutshellAgents) ? stored.nutshellAgents.slice(0, 5) : [];
+}
+async function saveAgents(list) { await chrome.storage.local.set({ nutshellAgents: (list || []).slice(0, 5) }); }
+function noteAgent(id, message) {
+  const el = document.querySelector(`[data-agent-state="${CSS.escape(id)}"]`);
+  if (el) el.textContent = message;
+}
+async function trainAgent(agent) {
+  if (!agent) return;
+  const runs = Number(agent.trainingRuns || 0);
+  if (runs >= 4) { noteAgent(agent.id, "Already fully trained (4/4 runs). Inspect to read the evaluation."); return; }
+  const next = { ...agent, trainingRuns: runs + 1, trainingStatus: "preparing", preparingAt: Date.now(), trainingError: "" };
+  const agents = await loadAgents();
+  await saveAgents(agents.map((a) => a.id === agent.id ? next : a));
+  await renderAgents();
+  try {
+    const { raw } = await NutshellAI.ask({
+      system: "You are NUTSHELL building a task-specific playbook for a specialist AI. Be concrete and practical.",
+      user: `Build a focused playbook for a specialist agent named "${agent.name}".\nFocus/topic: ${agent.focus}\nTraining run ${next.trainingRuns} of 4.\nReturn: (1) a short mission, (2) 5 step-by-step guidance bullets, (3) 3 quality checks, (4) 2 pitfalls to avoid.`,
+      maxTokens: 1200,
+    });
+    const agents2 = await loadAgents();
+    await saveAgents(agents2.map((a) => a.id === agent.id
+      ? { ...a, trainingStatus: "training", readyAt: Date.now() + (4 * 60 * 60 * 1000), playbook: raw, trainingProfile: raw }
+      : a));
+    noteAgent(agent.id, "Playbook prepared. Final evaluation runs in 4 hours.");
+  } catch (err) {
+    const agents3 = await loadAgents();
+    await saveAgents(agents3.map((a) => a.id === agent.id ? { ...a, trainingStatus: "idle", trainingError: err?.message || "Training failed" } : a));
+    noteAgent(agent.id, err?.message || "Training failed");
+  }
+  await renderAgents();
+}
+async function renderAgentInspection(agent) {
+  const panel = $("agent-inspection");
+  if (!panel) return;
+  if (!agent) { panel.textContent = "Select an agent to inspect."; panel.classList.remove("hidden"); return; }
+  panel.textContent = [
+    `Agent: ${agent.name}`,
+    `Focus: ${agent.focus}`,
+    `Training runs: ${agent.trainingRuns || 0}/4 · status: ${agent.trainingStatus || "idle"}`,
+    agent.readyAt ? `Final evaluation ready in: ${formatTrainingTime(remainingTrainingTime(agent))}` : "",
+    "",
+    "PLAYBOOK:",
+    agent.playbook || "(no playbook yet — train this agent)",
+  ].filter(Boolean).join("\n");
+  panel.classList.remove("hidden");
+}
+
+async function renderAgents() {
+  const [agents, stored] = await Promise.all([loadAgents(), chrome.storage.local.get("activeAgentId")]);
+  const select = $("active-agent");
+  const list = $("agents-list");
+  if (!select || !list) return;
+  const activeId = agents.some((agent) => agent.id === stored.activeAgentId) ? stored.activeAgentId : "recommended";
+  select.innerHTML = "";
+  const recommended = document.createElement("option");
+  recommended.value = "recommended"; recommended.textContent = "NUTSHELL 4.4";
+  select.appendChild(recommended);
+  agents.forEach((agent) => {
+    const option = document.createElement("option");
+    option.value = agent.id;
+    const preparing = agent.trainingStatus === "preparing";
+    const training = agent.trainingStatus === "training";
+    option.textContent = `${agent.name}${preparing ? " · Preparing" : training ? (remainingTrainingTime(agent) ? ` · Training ${formatTrainingTime(remainingTrainingTime(agent))}` : " · Finalizing") : ""}`;
+    option.disabled = preparing || training;
+    select.appendChild(option);
+  });
+  const activeAgent = agents.find((agent) => agent.id === activeId);
+  select.value = activeAgent && (activeAgent.trainingStatus === "preparing" || activeAgent.trainingStatus === "training") ? "recommended" : activeId;
+  list.innerHTML = "";
+  if (!agents.length) {
+    const empty = document.createElement("p");
+    empty.className = "comparison-status"; empty.textContent = "No saved specialist agents yet.";
+    list.appendChild(empty);
+  }
+  agents.forEach((agent) => {
+    const row = document.createElement("div");
+    row.className = "agent-row";
+    row.dataset.agentId = agent.id;
+    const title = document.createElement("strong"); title.textContent = agent.name;
+    const focus = document.createElement("span"); focus.textContent = agent.focus;
+    const state = document.createElement("span");
+    state.className = "agent-state"; state.dataset.agentState = agent.id;
+    state.dataset.trainingStatus = agent.trainingStatus || "idle";
+    state.textContent = agent.trainingStatus === "ready" ? `Trained · ${agent.trainingRuns || 1}/4 runs` : `Not trained · ${agent.trainingRuns || 0}/4 runs`;
+    const use = document.createElement("button");
+    use.className = "ghost"; use.type = "button";
+    use.textContent = activeId === agent.id && select.value === agent.id ? "Selected" : "Use agent";
+    use.addEventListener("click", async () => { await chrome.storage.local.set({ activeAgentId: agent.id }); await renderAgents(); });
+    const train = document.createElement("button");
+    train.className = "ghost agent-train"; train.type = "button";
+    train.textContent = agent.trainingStatus === "ready" ? "Retrain" : "Train";
+    train.addEventListener("click", () => void trainAgent(agent));
+    const inspect = document.createElement("button");
+    inspect.className = "ghost"; inspect.type = "button"; inspect.textContent = "Inspect";
+    inspect.addEventListener("click", () => void renderAgentInspection(agent));
+    const remove = document.createElement("button");
+    remove.className = "ghost profile-delete"; remove.type = "button"; remove.textContent = "Delete";
+    remove.addEventListener("click", async () => {
+      const cur = await loadAgents();
+      await saveAgents(cur.filter((a) => a.id !== agent.id));
+      await renderAgents();
+    });
+    row.append(title, focus, state, use, train, inspect, remove);
+    list.appendChild(row);
+  });
+}
+async function saveAgent() {
+  const name = ($("agent-name")?.value || "").trim();
+  const focus = ($("agent-focus")?.value || "").trim();
+  const status = $("agent-status");
+  if (!name || !focus) { if (status) status.textContent = "Add both a name and a topic to save a specialist."; return; }
+  const agents = await loadAgents();
+  const existing = agents.find((a) => a.name.toLowerCase() === name.toLowerCase());
+  const agent = {
+    ...(existing || {}),
+    id: existing?.id || "agent-" + Date.now(),
+    name, focus,
+    trainingRuns: Number(existing?.trainingRuns || 0),
+    trainingStatus: existing?.focus === focus ? (existing?.trainingStatus || "idle") : "idle",
+    readyAt: existing?.focus === focus ? Number(existing?.readyAt || 0) : 0,
+    trainingProfile: existing?.focus === focus ? (existing?.trainingProfile || null) : null,
+  };
+  const next = existing ? agents.map((item) => item.id === existing.id ? agent : item) : [...agents, agent];
+  await saveAgents(next);
+  await chrome.storage.local.set({ activeAgentId: agent.id });
+  $("agent-name").value = ""; $("agent-focus").value = "";
+  if (status) status.textContent = existing && existing.focus !== focus
+    ? "Specialist updated. Train it again to build a playbook for the new focus."
+    : "Specialist saved and selected. Train your AI to build its task playbook.";
+  await renderAgents();
+}
+
+
+/* ---------------- Identity verify ---------------- */
+let identityFiles = { front: null, back: null, selfie: null };
+let identityDocumentType = "National ID";
+let identityScan = null;
+function identityFileLabel(slot) { return slot === "selfie" ? "selfie" : `${identityDocumentType} ${slot}`; }
+function setIdentityScanStatus(message, kind = "") {
+  const el = $("identity-scan-result");
+  if (!el) return;
+  const span = el.querySelector("span:last-child");
+  if (span) span.textContent = message;
+  el.dataset.kind = kind;
+}
+function setIdentityTyping(on) { const el = $("identity-typing"); if (el) el.classList.toggle("hidden", !on); }
+function updateIdentityRequirementBadges(needs = []) {
+  ["front", "back", "selfie"].forEach((slot) => {
+    const slotEl = document.querySelector(`.identity-slot[data-slot="${slot}"]`);
+    const badge = slotEl?.querySelector(".slot-badge");
+    if (!slotEl || !badge) return;
+    const requested = needs.includes(slot);
+    slotEl.classList.toggle("site-requested", requested);
+    badge.classList.toggle("requested", requested);
+    badge.textContent = requested ? "On this page" : slot === "front" ? "Required" : "Optional";
+  });
+}
+function updateIdentitySlot(slot, file, dataUrl = "") {
+  identityFiles[slot] = file ? { file, dataUrl } : null;
+  const name = $(`identity-${slot}-name`);
+  const preview = $(`identity-${slot}-preview`);
+  const slotEl = document.querySelector(`.identity-slot[data-slot="${slot}"]`);
+  const loadButton = document.querySelector(`.identity-load[data-identity-slot="${slot}"]`);
+  const clearButton = document.querySelector(`.identity-clear[data-identity-slot="${slot}"]`);
+  if (name) name.textContent = file?.name || "No file selected";
+  if (loadButton) { loadButton.disabled = !file; loadButton.textContent = file && slotEl?.classList.contains("is-loaded") ? "Loaded" : slot === "selfie" ? "Load selfie" : `Load ${slot}`; }
+  if (clearButton) clearButton.disabled = !file;
+  if (preview) {
+    preview.innerHTML = "";
+    preview.classList.toggle("file-ready", Boolean(file));
+    if (file && /^image\//i.test(file.type || "") && dataUrl) {
+      const img = document.createElement("img");
+      img.src = dataUrl; img.alt = `${identityFileLabel(slot)} preview`;
+      preview.appendChild(img);
+    } else {
+      const label = document.createElement("span");
+      label.className = file ? "file-placeholder" : "preview-placeholder";
+      if (!file) { const icon = document.createElement("i"); icon.textContent = "↥"; label.appendChild(icon); }
+      label.appendChild(document.createTextNode(file ? `${file.name} ready to load` : (slot === "front" ? "Front side" : slot === "back" ? "Back side" : "Selfie")));
+      preview.appendChild(label);
+    }
+  }
+  slotEl?.classList.toggle("has-file", Boolean(file));
+  if (!file) slotEl?.classList.remove("is-loaded");
+}
+async function chooseIdentityFile(slot, file) {
+  if (!file) return;
+  if (slot === "selfie" && !/^image\//i.test(file.type || "")) { setIdentityScanStatus("A selfie must be an image file.", "bad"); return; }
+  try {
+    const dataUrl = await fileToDataUrl(file);
+    updateIdentitySlot(slot, file, dataUrl);
+    setIdentityScanStatus(`${identityFileLabel(slot)} ready. Load it when the site is asking for that step.`, "ok");
+  } catch (error) { setIdentityScanStatus(error?.message || "Could not read that file.", "bad"); }
+}
+async function scanIdentityPage() {
+  setIdentityScanStatus("Scanning the verification page…");
+  try {
+    const res = await runOnPage(portedScanIdentity);
+    identityScan = res;
+    updateIdentityRequirementBadges(res?.needs || []);
+    setIdentityScanStatus(res ? `Done scanning ${res.title}. ${res.fileInputs.length} upload field${res.fileInputs.length === 1 ? "" : "s"} found.` : "Scan the page to find document, selfie, and verification fields.", res ? "ok" : "");
+  } catch (error) { setIdentityScanStatus(error?.message || "Could not scan that page.", "bad"); }
+}
+async function loadIdentitySet(slot) {
+  const entry = identityFiles[slot];
+  const slotEl = document.querySelector(`.identity-slot[data-slot="${slot}"]`);
+  const button = document.querySelector(`.identity-load[data-identity-slot="${slot}"]`);
+  if (!entry) return;
+  if (button) button.disabled = true;
+  setIdentityScanStatus(`Loading ${identityFileLabel(slot)} into the matching field…`);
+  try {
+    const res = await runOnPage(portedLoadIdentityFile, [{ slot, dataUrl: entry.dataUrl, type: entry.file.type, name: entry.file.name }]);
+    if (!res?.ok) throw new Error(res?.message || "Could not load that file.");
+    slotEl?.classList.add("is-loaded");
+    if (button) button.textContent = "Loaded";
+    setIdentityScanStatus(`${res.message} Review before continuing or submitting.`, "ok");
+  } catch (error) {
+    setIdentityScanStatus(error?.message || "Could not load that file into the page.", "bad");
+  } finally { if (button) button.disabled = false; }
+}
+async function typeIdentityVerify() {
+  const button = $("identity-type-verify");
+  if (button) button.disabled = true;
+  setIdentityTyping(true);
+  setIdentityScanStatus("Typing “verify” into the matching field. You can stop it at any time…");
+  try {
+    const response = await runOnPage(portedTypeVerify, [{ speed: 90 }]);
+    if (response?.stopped) setIdentityScanStatus("Typing stopped. The field is left as-is for your review.", "bad");
+    else if (!response?.ok) setIdentityScanStatus(response?.message || "No verification phrase field was found.", "bad");
+    else setIdentityScanStatus(`${response.message} Review the field before submitting.`, "ok");
+  } catch (error) { setIdentityScanStatus(error?.message || "Could not type on this page.", "bad"); }
+  finally { setIdentityTyping(false); if (button) button.disabled = false; }
+}
+async function stopPageTyping() {
+  setIdentityTyping(false);
+  await runOnPage(portedStopTyping).catch(() => null);
+}
+

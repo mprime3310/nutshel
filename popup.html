@@ -7,7 +7,16 @@
   </head>
   <body>
     <div class="aurora"></div>
-    <div id="boot" class="boot"><div class="boot-mark">✦</div><p id="boot-copy">Connecting to models…</p><i></i></div>
+    <div id="boot" class="boot">
+      <div class="boot-mark">✦</div>
+      <p id="boot-copy">Connecting to models…</p>
+      <div class="boot-steps">
+        <span id="boot-step-environment">environment</span>
+        <span id="boot-step-tools">tools</span>
+        <span id="boot-step-models">models</span>
+      </div>
+      <div class="boot-bar"><i id="boot-progress-bar"></i></div>
+    </div>
 
     <section id="gate" class="gate hidden" aria-hidden="true" style="display:none !important">
     </section>
@@ -171,6 +180,127 @@
         </div>
       </section>
 
+      <section id="agents-studio" class="typer agents-studio">
+        <button id="agents-toggle" class="typer-toggle" type="button" aria-expanded="false" aria-controls="agents-body">
+          <span class="typer-toggle-text"><span class="typer-caret">▸</span> Specialist agents <span id="agents-count-inline" class="typer-count-inline">0</span></span>
+          <span class="typer-toggle-hint">train · playbook · inspect</span>
+        </button>
+        <div id="agents-body" class="typer-body hidden">
+          <p class="typer-tag">Create up to five specialists. Training prepares a task playbook, then runs an evaluation and refinement after four hours — even while NUTSHELL is closed. Inspect reads the report. This updates prompt guidance, not model weights.</p>
+          <div id="agents-list" class="agents-list"></div>
+          <label class="typer-label" for="agent-name">Agent name</label>
+          <input id="agent-name" class="typer-input" type="text" maxlength="80" placeholder="e.g. Research Methods Coach" autocomplete="off" />
+          <label class="typer-label" for="agent-focus">Topic or specialization</label>
+          <textarea id="agent-focus" class="typer-paste" maxlength="3000" placeholder="Describe the topic and how this specialist should help…"></textarea>
+          <div class="row typer-row">
+            <button id="agent-save" class="fill" type="button">＋ Save agent</button>
+            <button id="agent-train" class="ghost" type="button">✦ Train selected</button>
+          </div>
+          <p id="agent-status" class="typer-hint">Saved agents are used for analysis and follow-ups when selected.</p>
+          <div id="agent-inspect" class="agent-inspect hidden"></div>
+        </div>
+      </section>
+
+      <section id="memory-studio" class="typer memory-studio">
+        <button id="memory-toggle" class="typer-toggle" type="button" aria-expanded="false" aria-controls="memory-body">
+          <span class="typer-toggle-text"><span class="typer-caret">▸</span> Memory &amp; profiles</span>
+          <span class="typer-toggle-hint">optional · on-device</span>
+        </button>
+        <div id="memory-body" class="typer-body hidden">
+          <p class="typer-tag">Optional and off by default. Save up to 10 profiles and notes, then enable memory to include them in relevant AI requests. NUTSHELL does not silently collect pages you visit.</p>
+          <label class="check"><input id="memory-enabled" type="checkbox" /> Use NUTSHELL memory in requests</label>
+          <div id="memory-slots" class="memory-slots"></div>
+          <label class="typer-label" for="memory-notes">Memory notes</label>
+          <textarea id="memory-notes" class="typer-paste" maxlength="8000" placeholder="Add details and preferences you want NUTSHELL to remember over time…"></textarea>
+          <div class="row typer-row">
+            <button id="memory-save" class="fill" type="button">＋ Save profiles &amp; notes</button>
+            <span id="memory-status" class="typer-hint">Profiles stay on this device until you enable memory.</span>
+          </div>
+        </div>
+      </section>
+
+      <section id="documents-studio" class="typer documents-studio">
+        <button id="documents-toggle" class="typer-toggle" type="button" aria-expanded="false" aria-controls="documents-body">
+          <span class="typer-toggle-text"><span class="typer-caret">▸</span> Reference documents <span id="documents-count-inline" class="typer-count-inline">0</span></span>
+          <span class="typer-toggle-hint">pdf · docx · txt · media</span>
+        </button>
+        <div id="documents-body" class="typer-body hidden">
+          <p class="typer-tag">Upload files to ground your answers. PDF, DOC, DOCX, RTF, ODT, text, and images are read into the task context for Analyze and follow-ups.</p>
+          <div class="row typer-row">
+            <button id="documents-upload" class="ghost" type="button">⇧ Upload files</button>
+            <button id="documents-clear" class="ghost" type="button">✕ Clear</button>
+          </div>
+          <input id="document-input" class="hidden" type="file" accept="image/*,video/*,.pdf,.doc,.docx,.rtf,.odt,.txt,.md,.csv,.json" multiple />
+          <div id="document-status" class="documents-status hidden" aria-live="polite"></div>
+          <div id="document-files" class="upload-file-list hidden" aria-live="polite"></div>
+        </div>
+      </section>
+
+      <section id="reset-studio" class="typer reset-studio">
+        <button id="reset-toggle" class="typer-toggle" type="button" aria-expanded="false" aria-controls="reset-body">
+          <span class="typer-toggle-text"><span class="typer-caret">▸</span> Reset attempt</span>
+          <span class="typer-toggle-hint">find official retry</span>
+        </button>
+        <div id="reset-body" class="typer-body hidden">
+          <p class="typer-tag">Find the page's own reset or retry control. This starts a fresh attempt only when the site provides that option. NUTSHELL cannot erase results or bypass site attempt limits.</p>
+          <div class="row typer-row">
+            <button id="reset-scan" class="ghost" type="button">⌁ Find reset option</button>
+          </div>
+          <div id="reset-options" class="reset-options hidden"></div>
+          <div class="row typer-row">
+            <button id="reset-run" class="fill" type="button" disabled>Activate official retry</button>
+          </div>
+          <p id="reset-status" class="typer-hint">NUTSHELL can activate a visible official retry option provided by the page. It cannot erase results or bypass site attempt limits.</p>
+        </div>
+      </section>
+
+      <section id="identity-studio" class="typer identity-studio">
+        <button id="identity-toggle" class="typer-toggle" type="button" aria-expanded="false" aria-controls="identity-body">
+          <span class="typer-toggle-text"><span class="typer-caret">▸</span> Identity verify</span>
+          <span class="typer-toggle-hint">front · back · selfie</span>
+        </button>
+        <div id="identity-body" class="typer-body hidden">
+          <p class="typer-tag">Prepare your files, scan the active page, then load each one only when you approve it. Files stay local until loaded — NUTSHELL never submits verification for you.</p>
+          <div class="identity-type-row">
+            <span class="typer-label">I'm using</span>
+            <div class="identity-types" role="group" aria-label="Document type">
+              <button class="identity-type selected" type="button" data-identity-type="National ID">ID</button>
+              <button class="identity-type" type="button" data-identity-type="Driver's license">Driver's</button>
+              <button class="identity-type" type="button" data-identity-type="Passport">Passport</button>
+              <button class="identity-type" type="button" data-identity-type="Other">Other</button>
+            </div>
+          </div>
+          <div class="identity-slots">
+            <div class="identity-slot" data-slot="front">
+              <input id="identity-front-input" class="hidden" type="file" accept="image/*,.pdf" />
+              <div class="identity-slot-head"><span class="slot-index">01</span><div><strong>Document front</strong><small>Usually required</small></div><span class="slot-badge required">Required</span></div>
+              <div class="identity-file-row"><span id="identity-front-name">No file selected</span><button class="ghost identity-choose" type="button" data-file-input="identity-front-input">Upload</button></div>
+              <div class="identity-preview" id="identity-front-preview"><span class="preview-placeholder"><i>↥</i>Front side</span></div>
+              <div class="identity-slot-actions"><button class="fill identity-load" type="button" data-identity-slot="front" disabled>Load front</button><button class="ghost identity-clear" type="button" data-identity-slot="front" disabled>Clear</button></div>
+            </div>
+            <div class="identity-slot" data-slot="back">
+              <input id="identity-back-input" class="hidden" type="file" accept="image/*,.pdf" />
+              <div class="identity-slot-head"><span class="slot-index">02</span><div><strong>Document back</strong><small>Only if requested</small></div><span class="slot-badge">Optional</span></div>
+              <div class="identity-file-row"><span id="identity-back-name">No file selected</span><button class="ghost identity-choose" type="button" data-file-input="identity-back-input">Upload</button></div>
+              <div class="identity-preview" id="identity-back-preview"><span class="preview-placeholder"><i>↥</i>Back side</span></div>
+              <div class="identity-slot-actions"><button class="fill identity-load" type="button" data-identity-slot="back" disabled>Load back</button><button class="ghost identity-clear" type="button" data-identity-slot="back" disabled>Clear</button></div>
+            </div>
+            <div class="identity-slot" data-slot="selfie">
+              <input id="identity-selfie-input" class="hidden" type="file" accept="image/*" />
+              <div class="identity-slot-head"><span class="slot-index">03</span><div><strong>Selfie / live selfie</strong><small>Only if requested</small></div><span class="slot-badge">Optional</span></div>
+              <div class="identity-file-row"><span id="identity-selfie-name">No file selected</span><button class="ghost identity-choose" type="button" data-file-input="identity-selfie-input">Upload</button></div>
+              <div class="identity-preview" id="identity-selfie-preview"><span class="preview-placeholder"><i>↥</i>Selfie</span></div>
+              <div class="identity-slot-actions"><button class="fill identity-load" type="button" data-identity-slot="selfie" disabled>Load selfie</button><button class="ghost identity-clear" type="button" data-identity-slot="selfie" disabled>Clear</button></div>
+            </div>
+          </div>
+          <div class="row typer-row">
+            <button id="identity-scan" class="ghost" type="button">⌁ Scan verification page</button>
+            <button id="identity-type-verify" class="ghost" type="button">✎ Type “verify”</button>
+          </div>
+          <div id="identity-scan-result" class="identity-scan-result"><span class="scan-dot"></span><span>Scan the page to find document, selfie, and verification fields.</span></div>
+        </div>
+      </section>
+
       <section id="preview" class="preview hidden">
         <div class="preview-head">
           <h2>Confirm autofill</h2>
@@ -231,13 +361,16 @@
         <span id="pick-text"></span>
         <button id="pick-cancel" class="ghost" type="button">✕ Cancel</button>
       </div>
+      <div id="typing-banner" class="typing-banner hidden" aria-live="polite"><span class="typing-dots"><i></i><i></i><i></i></span><span>Typing into the page…</span><button id="stop-typing" class="ghost" type="button">Stop typing</button></div>
     </main>
 
     <footer>
       Powered by NUTSHELL Technologies
+      <button id="tutorial-open" class="ghost footer-link" type="button">Quick guide</button>
     </footer>
     <script src="lib/pdf.min.js"></script>
     <script src="ai.js"></script>
+    <script src="ported.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

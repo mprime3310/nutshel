@@ -10,7 +10,8 @@
     "storage",
     "contextMenus",
     "tabs",
-    "windows"
+    "windows",
+    "alarms"
   ],
   "host_permissions": [
     "<all_urls>"
