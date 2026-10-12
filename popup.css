@@ -876,6 +876,7 @@ h1 { background: none !important; color: #e9ddff !important; -webkit-background-
 .boot.boot-out { opacity: 0; visibility: hidden; }
 
 /* ---------- tutorial ---------- */
+.tutorial.hidden { display: none; }
 .tutorial { position: fixed; inset: 0; z-index: 2147483647; display: grid; place-items: center; padding: 18px; background: rgba(4,2,10,.86); }
 .tutorial-card { width: min(640px, 100%); max-height: 88vh; overflow-y: auto; padding: 18px; border: 1px solid rgba(184,140,255,.35); border-radius: 16px; background: #100a1e; }
 .tutorial-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
@@ -885,6 +886,8 @@ h1 { background: none !important; color: #e9ddff !important; -webkit-background-
 .tutorial-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 14px 0; }
 .tutorial-step { display: flex; gap: 8px; padding: 8px; border: 1px solid rgba(184,140,255,.22); border-radius: 10px; background: #0d0817; }
 .tutorial-step span { flex: none; font-size: 11px; font-weight: 700; color: #b88cff; }
+.tutorial-step strong { display: block; font-size: 11.5px; color: #e9ddff; margin-bottom: 2px; }
+.tutorial-num { flex: none; display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 7px; background: #2a1440; border: 1px solid rgba(184,140,255,.5); font: 700 10.5px/1 ui-monospace,Consolas,monospace; color: #e9ddff; }
 .tutorial-step h3 { margin: 0 0 2px; font-size: 11.5px; color: #e9ddff; }
 .tutorial-step p { font-size: 10px; line-height: 1.45; color: #9c8cbc; margin: 0; }
 .tutorial-foot { display: flex; align-items: center; gap: 10px; font-size: 10px; color: #9c8cbc; }

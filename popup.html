@@ -217,6 +217,9 @@
           <p class="typer-tag">Optional and off by default. Save up to 10 profiles and notes, then enable memory to include them in relevant AI requests. NUTSHELL does not silently collect pages you visit.</p>
           <label class="check"><input id="memory-enabled" type="checkbox" /> Use NUTSHELL memory in requests</label>
           <div id="memory-slots" class="memory-slots"></div>
+          <div class="row typer-row">
+            <button id="memory-add" class="ghost" type="button">＋ Add profile</button>
+          </div>
           <label class="typer-label" for="memory-notes">Memory notes</label>
           <textarea id="memory-notes" class="typer-paste" maxlength="8000" placeholder="Add details and preferences you want NUTSHELL to remember over time…"></textarea>
           <div class="row typer-row">
@@ -303,8 +306,10 @@
           <div class="row typer-row">
             <button id="identity-scan" class="ghost" type="button">⌁ Scan verification page</button>
             <button id="identity-type-verify" class="ghost" type="button">✎ Type “verify”</button>
+            <button id="identity-stop-typing" class="ghost hidden" type="button">■ Stop typing</button>
           </div>
           <div id="identity-scan-result" class="identity-scan-result"><span class="scan-dot"></span><span>Scan the page to find document, selfie, and verification fields.</span></div>
+          <div id="identity-typing" class="identity-typing hidden"><span class="scan-dot"></span><span>Typing “verify” into the matching field…</span></div>
         </div>
       </section>
 
@@ -377,6 +382,27 @@
       Powered by NUTSHELL Technologies
       <button id="tutorial-open" class="ghost footer-link" type="button">Quick guide</button>
     </footer>
+    <div id="tutorial" class="tutorial hidden" role="dialog" aria-modal="true" aria-label="NUTSHELL quick guide">
+      <div class="tutorial-card">
+        <div class="tutorial-head">
+          <div>
+            <span class="tutorial-kicker">Quick guide</span>
+            <h2>Using NUTSHELL</h2>
+            <p>Scan the page, review the answers, then fill approved fields.</p>
+          </div>
+          <button id="tutorial-close" class="win" type="button" aria-label="Close guide">×</button>
+        </div>
+        <div class="tutorial-grid">
+          <div class="tutorial-step"><span class="tutorial-num">1</span><div><strong>Scan or paste a task</strong><p>Analyze the page, then review each answer card.</p></div></div>
+          <div class="tutorial-step"><span class="tutorial-num">2</span><div><strong>Confirm autofill</strong><p>Approve fields, pick targets, then fill.</p></div></div>
+          <div class="tutorial-step"><span class="tutorial-num">3</span><div><strong>Use memory &amp; agents</strong><p>Save profiles and specialists under Advanced tools.</p></div></div>
+          <div class="tutorial-step"><span class="tutorial-num">4</span><div><strong>Bring your own key</strong><p>Open ⚙ and paste a free provider API key.</p></div></div>
+        </div>
+        <div class="row">
+          <button id="tutorial-done" class="fill" type="button">Got it</button>
+        </div>
+      </div>
+    </div>
     <script src="lib/pdf.min.js"></script>
     <script src="ai.js"></script>
     <script src="ported.js"></script>

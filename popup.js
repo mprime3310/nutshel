@@ -76,9 +76,7 @@ function renderActivationStatus() {
 async function openActivationGate() {
   await getState();
   renderActivationStatus();
-  if (activated) return;
-  showGate(Math.max(0, FREE_SCANS - scanCount));
-  setTimeout(() => $("token")?.focus(), 0);
+  // No gate UI in UNLIMITED mode — nothing to focus.
 }
 
 // The extension is deliberately the verifier. The bundled registry is loaded
@@ -1379,53 +1377,13 @@ function toggleListening() {
   }
 }
 
-/* ---------- wiring ---------- */
-if ($("activate")) $("activate").addEventListener("click", activateWithToken);
+/* ---------- wiring (activation gate removed: UNLIMITED, no token UI) ---------- */
 if ($("activation-status")) $("activation-status").addEventListener("click", () => {});
-if ($("token")) $("token").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") activateWithToken();
-});
 async function activateWithToken() {
-  const note = $("token-note");
-  const btn = $("activate");
-  const token = $("token").value.trim();
-  note.className = "token-note";
-  if (!/^NUT-/i.test(token)) {
-    note.textContent = "Enter the full NUT-… local code.";
-    return;
-  }
-  btn.disabled = true;
-  $("token").disabled = true;
-  gateEl.classList.add("checking");
-  btn.classList.add("checking");
-  try {
-    await redeemToken(token);
-    activated = true;
-    await persistState();
-    gateEl.classList.remove("checking");
-    btn.classList.remove("checking");
-    gateEl.classList.add("activating");
-    btn.classList.add("success");
-    btn.querySelector(".cta-label").textContent = "Activating…";
-    note.textContent = "Local code verified in this extension. Activating NUTSHELL…";
-    btn.querySelector(".cta-label").textContent = "Activated ✓";
-    note.textContent = "Activated — opening your workspace…";
-    hideGate();
-    renderActivationStatus();
-    $("token").value = "";
-    note.textContent = "";
-    showStatus("Activated — welcome to unlimited NUTSHELL. ✦");
-  } catch (e) {
-    gateEl.classList.remove("checking", "activating");
-    btn.classList.remove("checking", "success");
-    note.className = "token-note";
-    note.textContent = e.message;
-  } finally {
-    btn.disabled = false;
-    $("token").disabled = false;
-    btn.classList.remove("checking", "success");
-    btn.querySelector(".cta-label").textContent = "Activate";
-  }
+  // Gate UI was removed; unlimited mode needs no token. Kept so any stray
+  // caller can't throw on the missing #activate / #token / #token-note nodes.
+  try { hideGate(); renderActivationStatus(); } catch {}
+  try { showStatus("Unlimited use — no activation needed. ✦"); } catch {}
 }
 
 function openSettings() {
@@ -2399,8 +2357,12 @@ async function renderMemories() {
   profileCountForDraft = profiles.length;
   profiles.forEach((profile, index) => slotEl.appendChild(buildMemorySlot(index, profile)));
   if (addingProfile) slotEl.appendChild(buildMemorySlot(profiles.length, {}));
-  const add = $("profile-add");
-  if (add) { add.disabled = profiles.length >= 10 || addingProfile; add.textContent = profiles.length >= 10 ? "10 profiles saved" : "＋ Add profile"; }
+  const syncAdd = (id) => {
+    const add = $(id);
+    if (add) { add.disabled = profiles.length >= 10 || addingProfile; add.textContent = profiles.length >= 10 ? "10 profiles saved" : "＋ Add profile"; }
+  };
+  syncAdd("profile-add");
+  syncAdd("memory-add");
 }
 async function injectMemoryValue(label, value) {
   clearError();
@@ -2478,27 +2440,9 @@ async function renderAgentInspection(agent) {
 
 async function renderAgents() {
   const [agents, stored] = await Promise.all([loadAgents(), chrome.storage.local.get("activeAgentId")]);
-  const select = $("active-agent"); // optional dropdown; our UI is list-only
   const list = $("agents-list");
   if (!list) return;
   const activeId = agents.some((agent) => agent.id === stored.activeAgentId) ? stored.activeAgentId : "recommended";
-  if (select) {
-    select.innerHTML = "";
-    const recommended = document.createElement("option");
-    recommended.value = "recommended"; recommended.textContent = "NUTSHELL 4.4";
-    select.appendChild(recommended);
-    agents.forEach((agent) => {
-      const option = document.createElement("option");
-      option.value = agent.id;
-      const preparing = agent.trainingStatus === "preparing";
-      const training = agent.trainingStatus === "training";
-      option.textContent = `${agent.name}${preparing ? " · Preparing" : training ? (remainingTrainingTime(agent) ? ` · Training ${formatTrainingTime(remainingTrainingTime(agent))}` : " · Finalizing") : ""}`;
-      option.disabled = preparing || training;
-      select.appendChild(option);
-    });
-    const activeAgent = agents.find((agent) => agent.id === activeId);
-    select.value = activeAgent && (activeAgent.trainingStatus === "preparing" || activeAgent.trainingStatus === "training") ? "recommended" : activeId;
-  }
   list.innerHTML = "";
   if (!agents.length) {
     const empty = document.createElement("p");
@@ -2576,7 +2520,12 @@ function setIdentityScanStatus(message, kind = "") {
   if (span) span.textContent = message;
   el.dataset.kind = kind;
 }
-function setIdentityTyping(on) { const el = $("identity-typing"); if (el) el.classList.toggle("hidden", !on); }
+function setIdentityTyping(on) {
+  const el = $("identity-typing");
+  if (el) el.classList.toggle("hidden", !on);
+  const stop = $("identity-stop-typing");
+  if (stop) stop.classList.toggle("hidden", !on);
+}
 function updateIdentityRequirementBadges(needs = []) {
   ["front", "back", "selfie"].forEach((slot) => {
     const slotEl = document.querySelector(`.identity-slot[data-slot="${slot}"]`);
@@ -2795,6 +2744,15 @@ function initPortedFeatures() {
   wireStudioToggle("identity-toggle", "identity-body", "identityOpen");
 
   // memory: save profiles + notes + enabled toggle
+  const startAddingProfile = async () => {
+    const profiles = await loadMemories();
+    if (profiles.length >= 10) { noteMemories("You can save up to 10 profiles."); return; }
+    addingProfile = true;
+    editingProfileIndex = -1;
+    await renderMemories();
+  };
+  $("profile-add")?.addEventListener("click", () => void startAddingProfile());
+  $("memory-add")?.addEventListener("click", () => void startAddingProfile());
   $("memory-save")?.addEventListener("click", async () => {
     const enabled = $("memory-enabled")?.checked || false;
     const notes = String($("memory-notes")?.value || "").trim();
@@ -2834,6 +2792,7 @@ function initPortedFeatures() {
   // identity
   $("identity-scan")?.addEventListener("click", () => void scanIdentityPage());
   $("identity-type-verify")?.addEventListener("click", () => void typeIdentityVerify());
+  $("identity-stop-typing")?.addEventListener("click", () => void stopPageTyping());
   document.querySelectorAll(".identity-choose").forEach((btn) => btn.addEventListener("click", () => {
     const input = document.getElementById(btn.dataset.fileInput);
     if (input) input.click();
