@@ -555,6 +555,8 @@ async function runAnalysis(profile = "standard") {
     }).catch(() => null);
     let text = typedText;
     if (!text) text = ctx?.selection || ctx?.text || "";
+    const docsText = docsContextText();
+    if (docsText) text = `${text ? text + "\n\n" : ""}REFERENCE DOCUMENTS (use these to ground your answers):\n${docsText}`;
     const mediaCount = ctx?.media?.length || 0;
     // A media scan may legitimately run on a picture-only page with little text:
     // the inventory itself is the context, so don't demand readable text.
@@ -2120,6 +2122,15 @@ async function readImageBlob(file) {
     fr.readAsDataURL(file);
   });
 }
+// Read any file (image or PDF) straight to a data URL — used by Identity verify.
+async function fileToDataUrl(file) {
+  return await new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result || ""));
+    fr.onerror = () => reject(new Error("That file could not be read."));
+    fr.readAsDataURL(file);
+  });
+}
 async function runMediaMatch() {
   const prompt = String($("media-prompt")?.value || "").trim();
   const imgs = mediaImages.filter(Boolean).map((d) => ({ dataUrl: d }));
@@ -2265,23 +2276,30 @@ chrome.storage.local.get(["pendingText", "lastItems", "answerStyle", "fillMode",
     render(items);
   }
 
-  await getState();
-  renderActivationStatus();
+  // Failsafe: the boot overlay must never get stuck, no matter what fails below.
+  const boot = $("boot");
+  let bootHidden = false;
+  const hideBoot = () => { if (!bootHidden && boot) { bootHidden = true; boot.classList.add("boot-out"); } };
+  setTimeout(hideBoot, 2600);
+
+  try { await getState(); } catch (e) { console.warn("getState failed", e); }
+  try { renderActivationStatus(); } catch (e) { console.warn("activation status failed", e); }
   try { initTypeDeck(); } catch {}
   try { initMediaStudio(); } catch {}
   try { void initCvSettings(); } catch {}
 
-  await initAISettings();
-  const boot = $("boot");
-  const bootCopy = $("boot-copy");
-  if (!NutshellAI.hasProvider(aiCfg)) {
-    bootCopy.textContent = "Add an API key in ⚙ to get started";
-    aiNote("Pick a provider and paste a free API key, then hit Test.");
-    setTimeout(() => showStatus("Tap ⚙ to add a free API key (Groq or Gemini) and get started."), 1300);
-  } else {
-    bootCopy.textContent = "NUTSHELL is set.";
-  }
-  setTimeout(() => boot.classList.add("boot-out"), 1150);
+  try {
+    await initAISettings();
+    const bootCopy = $("boot-copy");
+    if (!NutshellAI.hasProvider(aiCfg)) {
+      if (bootCopy) bootCopy.textContent = "Add an API key in ⚙ to get started";
+      aiNote("Pick a provider and paste a free API key, then hit Test.");
+      setTimeout(() => showStatus("Tap ⚙ to add a free API key (Groq or Gemini) and get started."), 1300);
+    } else if (bootCopy) {
+      bootCopy.textContent = "NUTSHELL is set.";
+    }
+  } catch (e) { console.warn("AI settings init failed", e); }
+  setTimeout(hideBoot, 1150);
 
   /* ---- ported features: wire mode tabs, profiles, agents, identity, tutorial ---- */
   try { initPortedFeatures(); } catch (err) { console.warn("ported init failed", err); }
@@ -2317,7 +2335,7 @@ async function loadMemories() {
   return Array.isArray(stored.nutshellProfiles) ? stored.nutshellProfiles.slice(0, 10) : [];
 }
 async function saveMemories(list) { await chrome.storage.local.set({ nutshellProfiles: (list || []).slice(0, 10) }); }
-function noteMemories(message) { const n = $("memories-note"); if (n) n.textContent = message || ""; }
+function noteMemories(message) { const n = $("memory-status"); if (n) n.textContent = message || ""; }
 function readMemorySlot(wrap) {
   const out = {};
   MEMORY_FIELDS.forEach((f) => { const el = wrap.querySelector(`[data-mfield="${f.key}"]`); out[f.key] = String(el?.value || "").trim(); });
@@ -2374,7 +2392,7 @@ function buildMemorySlot(index, profile) {
   return wrap;
 }
 async function renderMemories() {
-  const slotEl = $("memories-slots");
+  const slotEl = $("memory-slots");
   if (!slotEl) return;
   slotEl.innerHTML = "";
   const profiles = await loadMemories();
@@ -2443,7 +2461,7 @@ async function trainAgent(agent) {
   await renderAgents();
 }
 async function renderAgentInspection(agent) {
-  const panel = $("agent-inspection");
+  const panel = $("agent-inspect");
   if (!panel) return;
   if (!agent) { panel.textContent = "Select an agent to inspect."; panel.classList.remove("hidden"); return; }
   panel.textContent = [
@@ -2460,29 +2478,31 @@ async function renderAgentInspection(agent) {
 
 async function renderAgents() {
   const [agents, stored] = await Promise.all([loadAgents(), chrome.storage.local.get("activeAgentId")]);
-  const select = $("active-agent");
+  const select = $("active-agent"); // optional dropdown; our UI is list-only
   const list = $("agents-list");
-  if (!select || !list) return;
+  if (!list) return;
   const activeId = agents.some((agent) => agent.id === stored.activeAgentId) ? stored.activeAgentId : "recommended";
-  select.innerHTML = "";
-  const recommended = document.createElement("option");
-  recommended.value = "recommended"; recommended.textContent = "NUTSHELL 4.4";
-  select.appendChild(recommended);
-  agents.forEach((agent) => {
-    const option = document.createElement("option");
-    option.value = agent.id;
-    const preparing = agent.trainingStatus === "preparing";
-    const training = agent.trainingStatus === "training";
-    option.textContent = `${agent.name}${preparing ? " · Preparing" : training ? (remainingTrainingTime(agent) ? ` · Training ${formatTrainingTime(remainingTrainingTime(agent))}` : " · Finalizing") : ""}`;
-    option.disabled = preparing || training;
-    select.appendChild(option);
-  });
-  const activeAgent = agents.find((agent) => agent.id === activeId);
-  select.value = activeAgent && (activeAgent.trainingStatus === "preparing" || activeAgent.trainingStatus === "training") ? "recommended" : activeId;
+  if (select) {
+    select.innerHTML = "";
+    const recommended = document.createElement("option");
+    recommended.value = "recommended"; recommended.textContent = "NUTSHELL 4.4";
+    select.appendChild(recommended);
+    agents.forEach((agent) => {
+      const option = document.createElement("option");
+      option.value = agent.id;
+      const preparing = agent.trainingStatus === "preparing";
+      const training = agent.trainingStatus === "training";
+      option.textContent = `${agent.name}${preparing ? " · Preparing" : training ? (remainingTrainingTime(agent) ? ` · Training ${formatTrainingTime(remainingTrainingTime(agent))}` : " · Finalizing") : ""}`;
+      option.disabled = preparing || training;
+      select.appendChild(option);
+    });
+    const activeAgent = agents.find((agent) => agent.id === activeId);
+    select.value = activeAgent && (activeAgent.trainingStatus === "preparing" || activeAgent.trainingStatus === "training") ? "recommended" : activeId;
+  }
   list.innerHTML = "";
   if (!agents.length) {
     const empty = document.createElement("p");
-    empty.className = "comparison-status"; empty.textContent = "No saved specialist agents yet.";
+    empty.className = "typer-hint"; empty.textContent = "No saved specialist agents yet.";
     list.appendChild(empty);
   }
   agents.forEach((agent) => {
@@ -2497,7 +2517,7 @@ async function renderAgents() {
     state.textContent = agent.trainingStatus === "ready" ? `Trained · ${agent.trainingRuns || 1}/4 runs` : `Not trained · ${agent.trainingRuns || 0}/4 runs`;
     const use = document.createElement("button");
     use.className = "ghost"; use.type = "button";
-    use.textContent = activeId === agent.id && select.value === agent.id ? "Selected" : "Use agent";
+    use.textContent = activeId === agent.id ? "Selected" : "Use agent";
     use.addEventListener("click", async () => { await chrome.storage.local.set({ activeAgentId: agent.id }); await renderAgents(); });
     const train = document.createElement("button");
     train.className = "ghost agent-train"; train.type = "button";
@@ -2608,7 +2628,7 @@ async function chooseIdentityFile(slot, file) {
 async function scanIdentityPage() {
   setIdentityScanStatus("Scanning the verification page…");
   try {
-    const res = await runOnPage(portedScanIdentity);
+    const res = await runOnPage(window.ported.scanIdentity);
     identityScan = res;
     updateIdentityRequirementBadges(res?.needs || []);
     setIdentityScanStatus(res ? `Done scanning ${res.title}. ${res.fileInputs.length} upload field${res.fileInputs.length === 1 ? "" : "s"} found.` : "Scan the page to find document, selfie, and verification fields.", res ? "ok" : "");
@@ -2622,7 +2642,7 @@ async function loadIdentitySet(slot) {
   if (button) button.disabled = true;
   setIdentityScanStatus(`Loading ${identityFileLabel(slot)} into the matching field…`);
   try {
-    const res = await runOnPage(portedLoadIdentityFile, [{ slot, dataUrl: entry.dataUrl, type: entry.file.type, name: entry.file.name }]);
+    const res = await runOnPage(window.ported.loadIdentityFile, [{ slot, dataUrl: entry.dataUrl, type: entry.file.type, name: entry.file.name }]);
     if (!res?.ok) throw new Error(res?.message || "Could not load that file.");
     slotEl?.classList.add("is-loaded");
     if (button) button.textContent = "Loaded";
@@ -2637,7 +2657,7 @@ async function typeIdentityVerify() {
   setIdentityTyping(true);
   setIdentityScanStatus("Typing “verify” into the matching field. You can stop it at any time…");
   try {
-    const response = await runOnPage(portedTypeVerify, [{ speed: 90 }]);
+    const response = await runOnPage(window.ported.typeVerify, [{ speed: 90 }]);
     if (response?.stopped) setIdentityScanStatus("Typing stopped. The field is left as-is for your review.", "bad");
     else if (!response?.ok) setIdentityScanStatus(response?.message || "No verification phrase field was found.", "bad");
     else setIdentityScanStatus(`${response.message} Review the field before submitting.`, "ok");
@@ -2646,6 +2666,201 @@ async function typeIdentityVerify() {
 }
 async function stopPageTyping() {
   setIdentityTyping(false);
-  await runOnPage(portedStopTyping).catch(() => null);
+  await runOnPage(window.ported.stopTyping).catch(() => null);
 }
+
+/* ---------------- Reference documents (PDF/DOC/DOCX/RTF/ODT/TXT) ----------------
+   Uploaded docs are parsed to text, kept session-side, and appended to the
+   Analyze / follow-up context so answers are grounded in them. */
+let uploadedDocs = [];
+function docsContextText() {
+  return uploadedDocs.map((d) => `--- ${d.name} ---\n${d.text}`).join("\n\n");
+}
+function renderUploadedDocs() {
+  const tray = $("document-files");
+  const status = $("document-status");
+  const count = $("documents-count-inline");
+  if (count) count.textContent = String(uploadedDocs.length);
+  if (tray) {
+    tray.innerHTML = "";
+    tray.classList.toggle("hidden", !uploadedDocs.length);
+    uploadedDocs.forEach((doc, i) => {
+      const row = document.createElement("div");
+      row.className = "upload-file-row";
+      const name = document.createElement("span");
+      name.textContent = `${doc.name} · ${Math.round(doc.text.length / 1000)}k chars`;
+      const del = document.createElement("button");
+      del.className = "ghost"; del.type = "button"; del.textContent = "✕";
+      del.addEventListener("click", () => { uploadedDocs.splice(i, 1); renderUploadedDocs(); });
+      row.append(name, del);
+      tray.appendChild(row);
+    });
+  }
+  if (status && !uploadedDocs.length) status.classList.add("hidden");
+}
+async function handleDocumentFiles(files) {
+  const list = [...(files || [])];
+  if (!list.length) return;
+  const status = $("document-status");
+  if (status) { status.textContent = `Reading ${list.length} file${list.length === 1 ? "" : "s"}…`; status.classList.remove("hidden"); }
+  const errors = [];
+  for (const file of list) {
+    try {
+      if (/^(image|video)\//i.test(file.type || "")) throw new Error("Media files aren't supported here — use the Media match panel.");
+      const text = await window.ported.extractDocument(file);
+      if (!text) throw new Error("No readable text found.");
+      uploadedDocs.push({ name: file.name, text: text.slice(0, 24000) });
+    } catch (e) { errors.push(`${file.name}: ${e?.message || "could not be read"}`); }
+  }
+  renderUploadedDocs();
+  if (status) {
+    status.textContent = uploadedDocs.length
+      ? `${uploadedDocs.length} document${uploadedDocs.length === 1 ? "" : "s"} ready${errors.length ? `. Skipped ${errors.join(" · ")}` : ""}.`
+      : `Couldn't read those files. ${errors.join(" · ")}`;
+    status.classList.toggle("bad", !uploadedDocs.length);
+    status.classList.remove("hidden");
+  }
+}
+
+/* ---------------- Reset attempt (find & click the page's own retry) ---------------- */
+let resetCandidates = [];
+function setResetStatus(message) { const el = $("reset-status"); if (el) el.textContent = message; }
+async function scanResetOptions() {
+  const btn = $("reset-scan"); if (btn) btn.disabled = true;
+  const run = $("reset-run"); if (run) run.disabled = true;
+  const list = $("reset-options"); if (list) { list.innerHTML = ""; list.classList.add("hidden"); }
+  setResetStatus("Looking for the page's own assessment retry/reset option…");
+  try {
+    const res = await runOnPage(window.ported.scanResetControls);
+    resetCandidates = (res?.candidates || []).map((c, i) => ({ ...c, index: i }));
+    if (!resetCandidates.length) { setResetStatus("No visible assessment reset option was found. Open the relevant attempt page and scan again."); return; }
+    if (list) {
+      resetCandidates.forEach((c) => {
+        const label = document.createElement("label");
+        label.className = "reset-option";
+        const radio = document.createElement("input");
+        radio.type = "radio"; radio.name = "reset-candidate"; radio.value = String(c.index);
+        radio.addEventListener("change", () => { if (run) run.disabled = false; });
+        const copy = document.createElement("span"); copy.textContent = c.label;
+        label.append(radio, copy);
+        list.appendChild(label);
+      });
+      list.classList.remove("hidden");
+    }
+    setResetStatus("Choose the site's reset option, then click Activate official retry.");
+  } catch (e) { setResetStatus(e?.message || "Could not scan this page for a reset option."); }
+  finally { if (btn) btn.disabled = false; }
+}
+async function runResetAttempt() {
+  const selected = document.querySelector('input[name="reset-candidate"]:checked');
+  if (!selected) return;
+  const run = $("reset-run"); if (run) run.disabled = true;
+  setResetStatus("Activating the selected official retry control. Complete any confirmation on the page.");
+  try {
+    const res = await runOnPage(window.ported.activateResetControl, [Number(selected.value)]);
+    if (!res?.ok) throw new Error(res?.message || "The page reset option could not be activated.");
+    setResetStatus("The page's official retry option was selected. If the site asks for confirmation, complete it on the page.");
+    showStatus("The page's official retry option was selected.");
+  } catch (e) { setResetStatus(`${e?.message || "The reset option could not be completed."} If the page navigated, refresh to check the new attempt.`); }
+  finally { if (run) run.disabled = false; }
+}
+
+/* ---------------- generic collapsible studio toggle ---------------- */
+function wireStudioToggle(toggleId, bodyId, storageKey) {
+  const btn = $(toggleId); const body = $(bodyId);
+  if (!btn || !body) return;
+  const apply = (open) => {
+    body.classList.toggle("hidden", !open);
+    btn.setAttribute("aria-expanded", String(open));
+  };
+  btn.addEventListener("click", () => {
+    const open = body.classList.contains("hidden");
+    apply(open);
+    if (storageKey) { try { chrome.storage.local.set({ [storageKey]: open }); } catch {} }
+  });
+  if (storageKey) {
+    try { chrome.storage.local.get([storageKey], (s) => { if (s && typeof s[storageKey] === "boolean") apply(s[storageKey]); }); } catch {}
+  }
+}
+
+/* ---------------- wire every ported collapsible section + its buttons ---------------- */
+function initPortedFeatures() {
+  // collapsible toggles (open state remembered)
+  wireStudioToggle("memory-toggle", "memory-body", "memoryOpen");
+  wireStudioToggle("agents-toggle", "agents-body", "agentsOpen");
+  wireStudioToggle("documents-toggle", "documents-body", "documentsOpen");
+  wireStudioToggle("reset-toggle", "reset-body", "resetOpen");
+  wireStudioToggle("identity-toggle", "identity-body", "identityOpen");
+
+  // memory: save profiles + notes + enabled toggle
+  $("memory-save")?.addEventListener("click", async () => {
+    const enabled = $("memory-enabled")?.checked || false;
+    const notes = String($("memory-notes")?.value || "").trim();
+    await chrome.storage.local.set({ nutshellMemoryEnabled: enabled, nutshellMemoryNotes: notes });
+    noteMemories(enabled ? "Saved. Memory will be included in relevant requests." : "Saved. Memory is off, so notes won't be sent.");
+  });
+  (async () => {
+    try {
+      const s = await chrome.storage.local.get(["nutshellMemoryEnabled", "nutshellMemoryNotes"]);
+      const en = $("memory-enabled"); if (en) en.checked = !!s.nutshellMemoryEnabled;
+      const notes = $("memory-notes"); if (notes) notes.value = s.nutshellMemoryNotes || "";
+    } catch {}
+    void renderMemories();
+  })();
+
+  // agents
+  $("agent-save")?.addEventListener("click", () => void saveAgent());
+  $("agent-train")?.addEventListener("click", async () => {
+    const s = await chrome.storage.local.get("activeAgentId");
+    const agents = await loadAgents();
+    const agent = agents.find((a) => a.id === s.activeAgentId) || agents[0];
+    if (!agent) { const st = $("agent-status"); if (st) st.textContent = "Save a specialist first, then train it."; return; }
+    void trainAgent(agent);
+  });
+  void renderAgents();
+
+  // documents
+  $("documents-upload")?.addEventListener("click", () => $("document-input")?.click());
+  $("documents-clear")?.addEventListener("click", () => { uploadedDocs = []; renderUploadedDocs(); showStatus("Reference documents cleared."); });
+  $("document-input")?.addEventListener("change", (e) => { handleDocumentFiles(e.target.files); e.target.value = ""; });
+  renderUploadedDocs();
+
+  // reset
+  $("reset-scan")?.addEventListener("click", () => void scanResetOptions());
+  $("reset-run")?.addEventListener("click", () => void runResetAttempt());
+
+  // identity
+  $("identity-scan")?.addEventListener("click", () => void scanIdentityPage());
+  $("identity-type-verify")?.addEventListener("click", () => void typeIdentityVerify());
+  document.querySelectorAll(".identity-choose").forEach((btn) => btn.addEventListener("click", () => {
+    const input = document.getElementById(btn.dataset.fileInput);
+    if (input) input.click();
+  }));
+  document.querySelectorAll('input[id^="identity-"][id$="-input"]').forEach((input) => {
+    input.addEventListener("change", () => {
+      const slot = input.id.replace("identity-", "").replace("-input", "");
+      const file = input.files?.[0];
+      input.value = "";
+      if (file) chooseIdentityFile(slot, file);
+    });
+  });
+  document.querySelectorAll(".identity-load").forEach((btn) => btn.addEventListener("click", () => void loadIdentitySet(btn.dataset.identitySlot)));
+  document.querySelectorAll(".identity-clear").forEach((btn) => btn.addEventListener("click", () => {
+    updateIdentitySlot(btn.dataset.identitySlot, null, "");
+    setIdentityScanStatus(`${identityFileLabel(btn.dataset.identitySlot)} cleared.`);
+  }));
+  document.querySelectorAll(".identity-type").forEach((btn) => btn.addEventListener("click", () => {
+    document.querySelectorAll(".identity-type").forEach((b) => b.classList.remove("selected"));
+    btn.classList.add("selected");
+    identityDocumentType = btn.dataset.identityType || "National ID";
+  }));
+
+  // tutorial
+  const tutorial = $("tutorial");
+  $("tutorial-open")?.addEventListener("click", () => tutorial?.classList.remove("hidden"));
+  $("tutorial-close")?.addEventListener("click", () => tutorial?.classList.add("hidden"));
+  $("tutorial-done")?.addEventListener("click", () => tutorial?.classList.add("hidden"));
+}
+
+
 

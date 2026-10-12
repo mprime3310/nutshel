@@ -5,8 +5,12 @@
    data export/import, tutorial, boot sequence, mode switching.
    Billing/activation and the accent-color picker are excluded.
    AI calls go through our real providers via NutshellAI.ask.
+   Wrapped in an IIFE so its top-level names never collide with popup.js
+   (a duplicate top-level const/let there would be a fatal SyntaxError that
+   kills the whole popup and freezes the boot overlay). Only the injected
+   page functions are exposed on window for popup.js to call.
    ================================================================ */
-
+(function () {
 const P = { $: (id) => document.getElementById(id) };
 const ask = (...a) => window.NutshellAI.ask(...a);
 
@@ -613,4 +617,22 @@ function pageStopTyping() {
   window.__nutshellStopTyping = true;
   return true;
 }
+
+/* ---------- expose injected page functions + helpers to popup.js ---------- */
+window.ported = {
+  // injected page functions (run inside the target tab via executeScript)
+  scanResetControls: pageScanResetControls,
+  activateResetControl: pageActivateResetControl,
+  scanIdentity: pageScanIdentity,
+  loadIdentityFile: pageLoadIdentityFile,
+  typeVerify: pageTypeVerify,
+  stopTyping: pageStopTyping,
+  // popup-side helpers ported.js owns
+  extractDocument: portedExtractDocument,
+  prepareUploadedMedia: portedPrepareUploadedMedia,
+  sampleVideoUpload: portedSampleVideoUpload,
+  sampleAnimatedImage: portedSampleAnimatedImage,
+  mediaFrameDataUrl: portedMediaFrameDataUrl,
+};
+})();
 
