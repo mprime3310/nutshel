@@ -2785,6 +2785,8 @@ function wireStudioToggle(toggleId, bodyId, storageKey) {
 
 /* ---------------- wire every ported collapsible section + its buttons ---------------- */
 function initPortedFeatures() {
+  // The five ported panels live inside one collapsed "Advanced tools" wrapper.
+  wireStudioToggle("advanced-toggle", "advanced-body", "advancedOpen");
   // collapsible toggles (open state remembered)
   wireStudioToggle("memory-toggle", "memory-body", "memoryOpen");
   wireStudioToggle("agents-toggle", "agents-body", "agentsOpen");
